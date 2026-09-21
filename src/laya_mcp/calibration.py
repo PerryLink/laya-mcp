@@ -414,24 +414,31 @@ def fit_from_examples(
     temperature fitted on five examples will reduce the training loss and make
     the held-out calibration worse.
     """
-    grouped: dict[str, list[tuple[list[float], int]]] = {}
+    grouped: dict[str, list[tuple[list[float], int, str]]] = {}
     for example in examples:
         probs = [float(p) for p in example["probabilities"]]
         outcome = int(example["outcome"])
         qtype = str(example.get("type", "choice"))
-        grouped.setdefault(bucket_for(qtype, len(probs)), []).append((probs, outcome))
+        grouped.setdefault(bucket_for(qtype, len(probs)), []).append((probs, outcome, qtype))
 
     by_options: dict[str, float] = {}
     all_probs: list[list[float]] = []
     all_outcomes: list[int] = []
+    # The primitive travels with each distribution. Without it the recalculation
+    # below has to guess a bucket, and the only guess available is `choice` -
+    # which would score a noul's fitted temperature against the choice bucket and
+    # report an improvement that does not exist.
+    all_qtypes: list[str] = []
     confidences_before: list[float] = []
     correct_before: list[bool] = []
 
     for bucket, rows in grouped.items():
-        probs = [r[0] for r in rows]
-        outcomes = [r[1] for r in rows]
+        probs = [row[0] for row in rows]
+        outcomes = [row[1] for row in rows]
+        qtypes = [row[2] for row in rows]
         all_probs.extend(probs)
         all_outcomes.extend(outcomes)
+        all_qtypes.extend(qtypes)
         for distribution, outcome in zip(probs, outcomes):
             top = max(range(len(distribution)), key=lambda i: distribution[i])
             confidences_before.append(concentration(distribution))
@@ -452,7 +459,8 @@ def fit_from_examples(
     brier_after = None
     if all_probs:
         recalibrated = [
-            apply_temperature(p, by_options.get(_bucket_for_len(p), 1.0)) for p in all_probs
+            apply_temperature(p, by_options.get(bucket_for(qt, len(p)), 1.0))
+            for p, qt in zip(all_probs, all_qtypes)
         ]
         confidences_after = [concentration(d) for d in recalibrated]
         correct_after = [

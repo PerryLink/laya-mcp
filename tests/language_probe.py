@@ -188,8 +188,57 @@ def measure(sidecar: str, case, framing: str) -> dict:
     label, pos, neg, noul_q, choice_q, criteria, positive, lang, expected = case
     if framing == "noul":
         question: dict[str, Any] = {"type": "noul", "instructions": noul_q}
+    elif framing == "noul_with_criteria":
+        # A noul as the caller would send it, with the option text supplied. The
+        # sidecar carries this as a choice under neutral labels; asking it here
+        # rather than as a raw choice is what measures the adapter instead of the
+        # idea behind it.
+        labels = list(criteria.keys())
+        negative = next(key for key in labels if key != positive)
+        question = {
+            "type": "noul",
+            "instructions": noul_q,
+            "criteria": {"true": criteria[positive], "false": criteria[negative]},
+        }
+    elif framing == "noul_as_choice":
+        # The same question, in the same words, asked as a two-option choice
+        # whose options carry the meaning - and labelled `A`/`B` rather than
+        # `true`/`false`, which is the whole point.
+        #
+        # `noul` renders its options as `false: ...` / `true: ...`, hardcoded
+        # upstream, and the model answers "false" to essentially every noul
+        # whatever the state says. Measured on one positive review, varying only
+        # the option labels and holding the question and the sentence fixed:
+        #
+        #     keys positive/negative  -> positive   0.835   correct
+        #     keys true/false         -> false      true=0.000  wrong
+        #     keys yes/no             -> no         yes=0.022   wrong
+        #     keys A/B                -> A          0.798   correct
+        #     keys 1/2                -> 1          0.906   correct
+        #
+        # So it is neither the primitive nor the option order - `yes`/`no` chose
+        # the second option and `true`/`false` the first. It is the literal label
+        # token: a `no`/`false` prior that dominates as soon as one is present,
+        # and a noul cannot avoid one because it always renders both.
+        #
+        # Neutral labels are the workaround available to a caller. This framing
+        # exists to measure whether it holds up over forty balanced items.
+        labels = list(criteria.keys())
+        negative = next(key for key in labels if key != positive)
+        question = {
+            "type": "choice",
+            "instructions": noul_q,
+            "criteria": {"A": criteria[positive], "B": criteria[negative]},
+        }
     else:
         question = {"type": "choice", "instructions": choice_q, "criteria": criteria}
+
+    TRUE_KEY = {
+        "noul": "true",
+        "noul_with_criteria": "true",
+        "noul_as_choice": "A",
+        "choice": positive,
+    }[framing]
 
     rows = [(t, True) for t in pos] + [(t, False) for t in neg]
     hits, models, logged = 0, set(), []
@@ -200,18 +249,21 @@ def measure(sidecar: str, case, framing: str) -> dict:
             print(f"  request failed: {exc}")
             return {"error": str(exc)}
         models.add(model)
-        if framing == "noul":
-            correct = (chosen == "true") == truth
-        else:
-            correct = (chosen == positive) == truth
+        correct = (chosen == TRUE_KEY) == truth
         hits += correct
         logged.append((truth, p, correct, chosen))
 
     total = len(rows)
     accuracy = hits / total
     mean_p = sum(p for _, p, _, _ in logged) / total
-    # The noul collapse: how many items came back as a constant near zero.
-    near_zero = sum(1 for truth, p, correct, chosen in logged if framing == "noul" and chosen == "false")
+    # How many items came back as the "no" answer, whichever key spells it.
+    FALSE_KEYS = {
+        "noul": {"false"},
+        "noul_with_criteria": {"false"},
+        "noul_as_choice": {"B"},
+        "choice": set(),
+    }[framing]
+    near_zero = sum(1 for _, _, _, chosen in logged if chosen in FALSE_KEYS)
     return {
         "label": label,
         "framing": framing,
@@ -227,10 +279,18 @@ def measure(sidecar: str, case, framing: str) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sidecar", default="http://127.0.0.1:8787")
-    parser.add_argument("--framing", choices=["noul", "choice", "both"], default="both")
+    parser.add_argument(
+        "--framing",
+        choices=["noul", "noul_with_criteria", "noul_as_choice", "choice", "all"],
+        default="all",
+    )
     args = parser.parse_args()
 
-    framings = ["noul", "choice"] if args.framing == "both" else [args.framing]
+    framings = (
+        ["noul", "noul_with_criteria", "noul_as_choice", "choice"]
+        if args.framing == "all"
+        else [args.framing]
+    )
     results = []
     for case in CASES:
         for framing in framings:
@@ -249,15 +309,18 @@ def main() -> int:
         )
 
     print("\nmajority baseline is 0.500 for every row (balanced 20/20).")
-    noul_rows = [r for r in results if r["framing"] == "noul"]
+    noul_rows = [r for r in results if r["framing"] in ("noul", "noul_with_criteria", "noul_as_choice")]
     for r in noul_rows:
         print(
-            f"  {r['label']}: the noul answered 'no' on {r['said_no']}/{r['total']} items "
-            f"and scored {r['accuracy']:.3f}"
+            f"  {r['label']:<24} {r['framing']:<16} answered 'no' on "
+            f"{r['said_no']:>2}/{r['total']} items, scored {r['accuracy']:.3f}"
         )
     print("\nIf a noul row sits near 0.500 with a high 'no' count while the matching")
     print("choice row scores well on the same sentences, the primitive - not the")
     print("language - is what fell over. That is the failure this file exists to catch.")
+    print("`noul_as_choice` asks the identical question as a two-option choice; when")
+    print("it scores well and `noul` does not, the type embedding is at fault and the")
+    print("framing is the workaround.")
     return 0
 
 

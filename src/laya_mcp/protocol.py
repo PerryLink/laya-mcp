@@ -81,6 +81,80 @@ class Question:
         return out
 
 
+#: The labels a noul is re-asked under when it is carried as a choice. Meaningless
+#: on purpose - see :func:`noul_as_choice` for why that is the whole trick.
+NEUTRAL_LABELS: tuple[str, str] = ("A", "B")
+
+
+def noul_as_choice(question: Question) -> dict[str, Any]:
+    """Re-express a noul as a two-option ``choice``, under neutral labels.
+
+    Laya renders every noul's options as ``false: ...`` / ``true: ...`` - both the
+    order and the words are hardcoded in ``common.render_options`` - and the model
+    then answers "false" to essentially every noul whatever the state says. It is
+    neither the primitive nor the option order. Holding one positive review and
+    one question fixed and varying only the option labels:
+
+    ============================  =========  =========================
+    labels                        answer     P
+    ============================  =========  =========================
+    ``positive`` / ``negative``   positive   0.835   correct
+    ``true`` / ``false``          false      true=0.000
+    ``yes`` / ``no``              no         yes=0.022
+    ``A`` / ``B``                 A          0.798   correct
+    ``1`` / ``2``                 1          0.906   correct
+    ============================  =========  =========================
+
+    ``yes``/``no`` chose the *second* option and ``true``/``false`` the *first*,
+    so this is not position bias. It is the label token itself, and a noul cannot
+    avoid one. Over forty balanced items the effect is total: the noul scores
+    0.500 in both languages with 40/40 answering "false", while the same forty
+    questions asked this way score 1.000 (English) and 0.975 (multilingual).
+
+    The option *text* matters too, in the opposite direction from what one would
+    guess. A semantic description is read; generic boilerplate collapses under any
+    label. ``A: yes, the statement holds`` / ``B: no, the statement does not hold``
+    answers "B" to a plainly positive review, while ``A`` / ``B`` with no
+    description at all answers correctly. So a caller's own wording is kept, and
+    its absence is left absent rather than filled in with boilerplate that would
+    itself cause the failure this function exists to avoid.
+    """
+    criteria = question.criteria if isinstance(question.criteria, Mapping) else {}
+    true_text = criteria.get("true")
+    false_text = criteria.get("false")
+    return {
+        "type": "choice",
+        "instructions": question.instructions,
+        "criteria": {
+            NEUTRAL_LABELS[0]: true_text if true_text not in (None, "") else "",
+            NEUTRAL_LABELS[1]: false_text if false_text not in (None, "") else "",
+        },
+    }
+
+
+def noul_has_option_text(question: Question) -> bool:
+    """Whether a noul carries enough option text to survive being carried.
+
+    The carry only works with **descriptive** options. Measured over forty
+    balanced items, per language:
+
+    ====================================  =========  ==============
+    how the noul was asked                english    multilingual
+    ====================================  =========  ==============
+    as a noul (upstream's own wording)     0.500      0.500
+    carried, with the caller's criteria    1.000      0.975
+    carried, with no criteria at all       0.625      0.525
+    ====================================  =========  ==============
+
+    With no criteria the options render as bare ``A`` and ``B``, and the model
+    answers one of them almost every time - a different constant, not a reading.
+    So a noul without criteria is sent as a noul: carrying it would trade one
+    constant for another and hide the fact that there was nothing to decide with.
+    """
+    criteria = question.criteria if isinstance(question.criteria, Mapping) else {}
+    return any(criteria.get(key) not in (None, "") for key in ("true", "false"))
+
+
 @dataclass
 class Answer:
     """One answer, normalised across the three primitives.

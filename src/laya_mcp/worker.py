@@ -63,12 +63,15 @@ from .errors import (
 )
 from .planning import BudgetPlan, plan_questions, script_caveat
 from .protocol import (
+    NEUTRAL_LABELS,
     Answer,
     AskRequest,
     AskResponse,
     Question,
     RoutingInfo,
     Usage,
+    noul_as_choice,
+    noul_has_option_text,
 )
 from .validate import validate_questions
 
@@ -127,6 +130,14 @@ class WorkerConfig:
     #: refusing, and the report is what makes the answer interpretable.
     strict: bool = False
     preload: bool = True
+    #: Carry every noul as a two-option choice under neutral labels. On by default
+    #: because the alternative is measured: as a noul, this checkpoint answers
+    #: "false" to 40/40 items in both languages and scores exactly chance, while
+    #: the same questions carried this way score 1.000 and 0.975.
+    #:
+    #: It is a workaround for a defect in the checkpoint, not a preference, so it
+    #: is a knob: turn it off to see the raw primitive, or once upstream fixes it.
+    noul_as_choice: bool = True
 
 
 class LayaWorker:
@@ -446,6 +457,20 @@ class LayaWorker:
         package exists not to do.
         """
         warnings: list[str] = []
+        bare = sorted(
+            qid
+            for qid, question in request.questions.items()
+            if question.type == "noul" and not noul_has_option_text(question)
+        )
+        if bare:
+            warnings.append(
+                f"noul question(s) {', '.join(bare)} have no criteria. This checkpoint renders a "
+                "noul's options as the fixed pair `false: ...` / `true: ...` and then answers the "
+                "first of them whatever the state says - measured at 40/40 'false' over forty "
+                "balanced items, in both English and Chinese. Supply criteria, as "
+                '`boundary: {"true": ..., "false": ...}`, so the question can be carried as a '
+                "choice with real options; or ask it as a choice or a score instead."
+            )
         caveat = script_caveat(capability, request.state, request.questions)
         if caveat:
             warnings.append(caveat)
@@ -497,7 +522,7 @@ class LayaWorker:
         started = time.perf_counter()
         self._calls += 1
 
-        questions = {qid: q.to_laya() for qid, q in request.questions.items()}
+        questions, carried_nouls = self._to_laya_questions(request.questions)
         routing: Optional[RoutingInfo] = None
 
         try:
@@ -538,7 +563,9 @@ class LayaWorker:
         latency_ms = (time.perf_counter() - started) * 1000
         self._last_latency_ms = latency_ms
 
-        answers = self._normalise_answers(raw, request.questions, checkpoint, capability)
+        answers = self._normalise_answers(
+            raw, request.questions, checkpoint, capability, carried_nouls
+        )
         truncated = plan.truncation_report()
 
         warnings: list[str] = list(plan.warnings)
@@ -593,12 +620,38 @@ class LayaWorker:
             workflow=routing.get("workflow"),
         )
 
+    def _to_laya_questions(
+        self, questions: Mapping[str, Question]
+    ) -> tuple[dict[str, dict[str, Any]], set[str]]:
+        """Render the batch for Laya, and say which nouls were carried as choices.
+
+        Returns the rendered questions and the ids whose *answer* has to be read
+        back out of a choice distribution. The two must travel together: a noul
+        sent as a choice comes back with ``choice``/``probabilities`` and no
+        ``noul`` field at all, so a caller that forgot the second half would
+        report every one of them as unanswered.
+        """
+        rendered: dict[str, dict[str, Any]] = {}
+        carried: set[str] = set()
+        for question_id, question in questions.items():
+            if (
+                self.config.noul_as_choice
+                and question.type == "noul"
+                and noul_has_option_text(question)
+            ):
+                rendered[question_id] = noul_as_choice(question)
+                carried.add(question_id)
+            else:
+                rendered[question_id] = question.to_laya()
+        return rendered, carried
+
     def _normalise_answers(
         self,
         raw: Mapping[str, Any],
         questions: Mapping[str, Question],
         checkpoint: str,
         capability: Capability,
+        carried_nouls: Optional[set[str]] = None,
     ) -> Mapping[str, Answer]:
         """Turn Laya's per-primitive answer dicts into one shape.
 
@@ -630,7 +683,19 @@ class LayaWorker:
             )
 
             if question.type == "noul":
-                probability = _as_float(payload.get("noul"))
+                if carried_nouls and question_id in carried_nouls:
+                    # Asked as a two-option choice under neutral labels, so
+                    # P(true) is the probability of the first label - see
+                    # `protocol.noul_as_choice` for why it was asked that way.
+                    probabilities = _as_float_map(payload.get("probabilities")) or {}
+                    probability = probabilities.get(NEUTRAL_LABELS[0])
+                    # Keep the distribution. A noul is the one primitive whose
+                    # answer is a single number, and dropping the distribution
+                    # here would make the calibration step below skip every noul
+                    # in silence - it only fires on an answer that has one.
+                    answer.probabilities = probabilities or None
+                else:
+                    probability = _as_float(payload.get("noul"))
                 answer.noul = probability
                 if probability is not None:
                     answer.band = _band(probability)
@@ -652,6 +717,15 @@ class LayaWorker:
                 if abs(temperature - 1.0) > 1e-9:
                     rescaled = _rescale(answer, temperature)
                     answer.probabilities = rescaled
+                    if question.type == "noul":
+                        # A carried noul's answer is a number read off this
+                        # distribution, so rescaling without re-reading it would
+                        # leave `noul` and `probabilities` contradicting each
+                        # other inside one response.
+                        reread = rescaled.get(NEUTRAL_LABELS[0])
+                        if reread is not None:
+                            answer.noul = reread
+                            answer.band = _band(reread)
 
             out[question_id] = answer
 
