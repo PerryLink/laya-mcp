@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import sys
+import threading
 from typing import Any, Mapping, Optional, Sequence
 
 from . import __version__
@@ -80,18 +81,59 @@ class Backend:
         self.sidecar = sidecar.rstrip("/") if sidecar else None
         self._worker: Optional[LayaWorker] = None
         self._config = config or WorkerConfig()
+        self._warm_done = threading.Event()
+        self._warm_error: Optional[BaseException] = None
 
     def _local(self) -> LayaWorker:
         if self._worker is None:
             self._worker = LayaWorker(self._config)
         return self._worker
 
-    def warm(self) -> None:
-        """Load the model now, on the calling thread.
+    def start_warm(self) -> None:
+        """Begin loading the model on a background thread.
 
-        Called before an event loop exists, so the heavy imports and the
-        checkpoint load happen where blocking is harmless. A no-op when a sidecar
-        is configured: the model is not this process's to load.
+        The handshake has to be answered *now*. Both harnesses measured here give
+        an MCP server 30 seconds to complete `initialize`, and loading a
+        checkpoint first costs 19 s uncontended and 275 s while another model owns
+        the GPU - so preloading before `server.run()` means the client reports
+        "Failed to connect" and never sees the tool list at all. Measured with
+        opencode and claude, both of which then time out on a config they had
+        parsed correctly.
+
+        Loading on a thread rather than on the loop thread is the whole point.
+        Doing this work *on the event loop* hangs - reproduced here, and recorded
+        in this file's history - while the identical load from a separate thread
+        completes. The handshake and `tools/list` are answered while this runs;
+        only a tool call that actually needs the model waits, and it waits on an
+        Event rather than on the loop.
+        """
+        if self.sidecar:
+            self._warm_done.set()
+            return
+
+        def _load() -> None:
+            try:
+                self._local().start()
+            except BaseException as exc:  # noqa: BLE001 - re-raised on first use
+                self._warm_error = exc
+            finally:
+                self._warm_done.set()
+
+        threading.Thread(target=_load, name="laya-warm", daemon=True).start()
+
+    def wait_warm(self) -> None:
+        """Block until the model is up. Cheap and idempotent once it is."""
+        if self.sidecar:
+            return
+        self._warm_done.wait()
+        if self._warm_error is not None:
+            raise self._warm_error
+
+    def warm(self) -> None:
+        """Load the model synchronously on the calling thread.
+
+        Kept for callers that want the old behaviour - a script, or a test that
+        would rather fail at startup than at the first call.
         """
         if self.sidecar:
             return
@@ -104,6 +146,7 @@ class Backend:
             self._worker = None
 
     def ask(self, request: AskRequest) -> Mapping[str, Any]:
+        self.wait_warm()
         if self.sidecar:
             return _post_json(
                 f"{self.sidecar}/ask",
@@ -122,6 +165,7 @@ class Backend:
         return response.to_dict()
 
     def plan(self, state: Any, questions: Mapping[str, Question]) -> Mapping[str, Any]:
+        self.wait_warm()
         """Plan against the checkpoint's budget, without a forward pass."""
         from .planning import plan_questions
         from .validate import validate_questions
@@ -490,29 +534,31 @@ def run_stdio(
 
     backend = Backend(sidecar=sidecar, config=config)
 
-    # Warm the model BEFORE `server.run()` enters the asyncio loop.
+    # Start the load, and do NOT wait for it here.
     #
-    # FastMCP dispatches a synchronous tool on the event-loop thread, so without
-    # this the first tool call performs `import torch` and the checkpoint load
-    # *inside a running loop*. That path hangs: it was reproduced with the MCP SDK
-    # in the driver's seat (handshake in 0.4 s, then no response to `tools/call`
-    # for 120 s, with a stack dump showing the worker parked inside the numpy
-    # import), while the identical load completes in 8-13 s when called directly,
-    # from a thread, on a running loop without the MCP transport, and under every
-    # environment override the failing case used. Those four all reproduce
-    # successfully, which is why the difference is placement and not the work.
+    # Two constraints pull against each other and this is where they are settled.
     #
-    # Warming here is also the better design regardless of the hang: the cost is
-    # paid once at startup, where a client expects a server to be slow to come up,
-    # instead of on the first request, where it looks like a timeout.
+    # The load must not run on the event loop. FastMCP dispatches a synchronous
+    # tool on the loop thread, and `import torch` plus a checkpoint load inside a
+    # running loop hangs: reproduced with the MCP SDK in the driver's seat
+    # (handshake in 0.4 s, then no response to `tools/call` for 120 s, parked
+    # inside the numpy import), while the identical load completes in 8-13 s from
+    # a separate thread. That is why this work is on a thread and not in a
+    # handler.
+    #
+    # And the handshake must not wait for it either. Both harnesses measured here
+    # - opencode and claude - allow an MCP server 30 seconds to finish
+    # `initialize`. Loading first costs 19 s uncontended and 275 s while another
+    # model holds the GPU, so a client sees "Failed to connect" and never reaches
+    # the tool list, on a config it parsed perfectly.
+    #
+    # So: run it in the background, answer `initialize` and `tools/list`
+    # immediately, and let the first call that actually needs the model wait for
+    # it through `Backend.wait_warm`. A failure is re-raised there, which is where
+    # it becomes a structured error the caller can read, rather than a server that
+    # never appears.
     if sidecar is None:
-        try:
-            backend.warm()
-        except LayaMcpError as exc:
-            # Report and carry on rather than refusing to start: a client that can
-            # see the tool list and a structured error is better served than one
-            # whose server never appeared.
-            print(f"laya-mcp: could not preload the model: {exc}", file=sys.stderr)
+        backend.start_warm()
 
     try:
         server = build_server(backend, tools)
