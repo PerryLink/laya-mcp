@@ -157,6 +157,15 @@ def main() -> int:
     oom = translate(RuntimeError("CUDA out of memory"))
     check("CUDA OOM -> out_of_memory", oom.code.value == "out_of_memory")
     check("out_of_memory is retryable", oom.to_dict()["retryable"] is True)
+    # Measured against the real checkpoint: a choice with no criteria raises
+    # AttributeError('NoneType' ... 'items'), not KeyError. Reading the source
+    # alone would have missed this, which is why the fix is pinned by a test.
+    attr = translate(AttributeError("'NoneType' object has no attribute 'items'"), question_id="q")
+    check("missing criteria AttributeError -> invalid_question",
+          attr.code.value == "invalid_question", attr.code.value)
+    other = translate(AttributeError("'str' object has no attribute 'foo'"))
+    check("an unrelated AttributeError stays internal",
+          other.code.value == "internal", other.code.value)
 
     print("\nplanning")
     check("serialized_state_chars matches json.dumps",

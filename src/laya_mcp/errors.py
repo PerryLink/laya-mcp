@@ -280,7 +280,7 @@ def translate(exc: BaseException, *, question_id: Optional[str] = None) -> Layac
     if isinstance(exc, FileNotFoundError):
         return ModelUnavailableError(
             str(exc),
-            hint="the checkpoint is absent or incomplete; `layacore doctor` reports what is loadable",
+            hint="the checkpoint is absent or incomplete; `laya-mcp doctor` reports what is loadable",
             cause=exc,
         )
 
@@ -292,6 +292,27 @@ def translate(exc: BaseException, *, question_id: Optional[str] = None) -> Layac
             hint="a score's `criteria` is an ordered array of level descriptions; a choice's is a label->description map",
             cause=exc,
         )
+
+    if isinstance(exc, AttributeError):
+        # Measured against the real checkpoint: a `choice` with no `criteria`
+        # raises `AttributeError: 'NoneType' object has no attribute 'items'` from
+        # `render_options` (which calls `crit.items()`), NOT a KeyError. Reading
+        # the source suggests KeyError, because `system_one` does `q["crit"]` - but
+        # the key EXISTS and its value is None, so the failure happens one call
+        # deeper than the source alone implies. Only this exact shape is claimed
+        # as a missing-criteria bug; any other AttributeError is left as the
+        # internal fault it is.
+        if "'NoneType' object has no attribute" in str(exc):
+            return InvalidQuestionError(
+                "the question's `criteria` is None",
+                question_id=question_id,
+                hint=(
+                    "a choice needs a mapping of permitted labels to descriptions, and a score "
+                    "an ordered array of levels; for a noul, criteria is optional"
+                ),
+                cause=exc,
+            )
+        return InternalError(f"unexpected AttributeError: {exc}", cause=exc)
 
     name = type(exc).__name__
     if "OutOfMemory" in name or "out of memory" in str(exc).lower():

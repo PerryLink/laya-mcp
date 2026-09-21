@@ -126,7 +126,12 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
-        if path not in ("/ask", "/v1/ask"):
+        # `/v1/systemone` is the surface TypeSafe's own API and several Laya ports
+        # have converged on, so an existing client can be pointed here by changing
+        # one base URL. It takes the same body as `/ask`; the compatibility is at
+        # the transport and envelope level, not a claim to reproduce every field of
+        # a closed API this project has no access to.
+        if path not in ("/ask", "/v1/ask", "/v1/systemone"):
             self._send(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found", "path": path})
             return
         try:
