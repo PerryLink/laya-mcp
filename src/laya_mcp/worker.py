@@ -358,23 +358,43 @@ class LayaWorker:
     def capability_for(self, checkpoint: str) -> Optional[Capability]:
         return self._capabilities.get(checkpoint)
 
+    def _capability_for(self, name: str) -> Capability:
+        """The capability of the checkpoint that will actually answer.
+
+        Resolving an explicit ``lang`` can select a checkpoint this host was never
+        configured to preload - ``--model english`` plus ``lang="zh"`` means
+        ``multilingual`` - and every downstream number comes from the capability:
+        the token budget, the script caveat, the device. Falling back to whichever
+        checkpoint happened to be loaded is how a ``multilingual`` answer was
+        planned against the English checkpoint's 512-token head budget and handed
+        a warning saying English could not read the text it had just read.
+        """
+        capability = self._capabilities.get(name)
+        if capability is not None:
+            return capability
+
+        agent = self._router.load(name)
+        self._apply_overrides(agent)
+        capability = self._describe(name, agent)
+        self._capabilities[name] = capability
+        return capability
+
     # -- inference -----------------------------------------------------------
 
     def ask(self, request: AskRequest) -> AskResponse:
         """Run one batch. The whole public surface of the model host."""
+        log.debug("ask: entering (loaded=%s)", self._loaded)
         self.start()
+        log.debug("ask: model ready")
 
         # Validation and planning happen before the lock: they are pure and a bad
         # request should not queue behind a good one.
         validate_questions(request.questions)
         checkpoint = self._resolve_checkpoint(request)
-        capability = self._capabilities.get(checkpoint) or next(
-            iter(self._capabilities.values()), None
-        )
-        if capability is None:  # pragma: no cover - start() guarantees one
-            raise UnknownModelError("no checkpoint is loaded")
+        capability = self._capability_for(checkpoint)
 
         plan: BudgetPlan = plan_questions(capability, request.state, request.questions)
+        log.debug("ask: planned (fits=%s, checkpoint=%s)", plan.fits, checkpoint)
         plan.warnings = (*plan.warnings, *self._request_warnings(request, capability))
         if (request.strict or self.config.strict) and not plan.fits:
             raise StateTruncatedError(
@@ -413,11 +433,7 @@ class LayaWorker:
         self.start()
         validate_questions(request.questions)
         checkpoint = self._resolve_checkpoint(request)
-        capability = self._capabilities.get(checkpoint) or next(
-            iter(self._capabilities.values()), None
-        )
-        if capability is None:  # pragma: no cover - start() guarantees one
-            raise UnknownModelError("no checkpoint is loaded")
+        capability = self._capability_for(checkpoint)
 
         plan: BudgetPlan = plan_questions(capability, request.state, request.questions)
         plan.warnings = (*plan.warnings, *self._request_warnings(request, capability))
@@ -432,18 +448,6 @@ class LayaWorker:
         package exists not to do.
         """
         warnings: list[str] = []
-        if request.lang:
-            # Not an oversight to be fixed by forwarding it: Laya's own
-            # `system_one(state, questions)` takes no language argument, so there
-            # is nowhere for the value to go, and naming `lang` is what selects
-            # this path in the first place - the router, which is the only
-            # component that reads `lang`, is bypassed by asking for it.
-            warnings.append(
-                f"lang={request.lang!r} was not applied. Laya's `system_one(state, questions)` "
-                "takes no language argument, so the override is dropped; naming `lang` also "
-                "takes the explicit path, which bypasses the router - the one component that "
-                "does read it. Omit `lang` to let the router route on the text itself."
-            )
         caveat = script_caveat(capability, request.state, request.questions)
         if caveat:
             warnings.append(caveat)
@@ -452,11 +456,16 @@ class LayaWorker:
     def _resolve_checkpoint(self, request: AskRequest) -> str:
         """Which checkpoint will answer.
 
-        An explicit model wins. Otherwise, if only one is loaded, that one. With
-        several loaded the router decides, and this reports its choice rather than
-        predicting it - the whole point of forwarding ``routing`` is that the
-        caller can see the detector's reasoning, including the case where it
-        silently treated a Latin-script language as English.
+        Precedence: an explicit ``model``, then an explicit ``lang``, then the only
+        loaded checkpoint, then the configured default.
+
+        The ``lang`` branch asks the router rather than re-deriving its rule. That
+        rule is one line - anything that is not English means ``multilingual`` -
+        and copying it here is exactly how two implementations drift apart.
+        Asking it also repairs what ``lang`` used to do: naming a language took
+        the explicit path in :meth:`_run`, which bypasses the router, so
+        ``lang="zh"`` was answered by the English checkpoint with nothing in the
+        response to say so. The router is the only component that reads ``lang``.
         """
         if request.model:
             try:
@@ -467,6 +476,15 @@ class LayaWorker:
                     hint="known checkpoints are english, multilingual and typed-decisions",
                     cause=exc,
                 ) from exc
+        if request.lang:
+            decision = self._router.route(
+                request.state,
+                {qid: q.to_laya() for qid, q in request.questions.items()},
+                lang=request.lang,
+            )
+            routed = decision.get("model") if isinstance(decision, Mapping) else None
+            if routed:
+                return str(routed)
         if len(self._capabilities) == 1:
             return next(iter(self._capabilities))
         return self.config.model
@@ -485,20 +503,24 @@ class LayaWorker:
         routing: Optional[RoutingInfo] = None
 
         try:
-            if self.config.model_root or request.model or request.lang or request.task:
+            if self.config.model_root or request.model or request.task:
                 # An explicit choice bypasses the router's own reasoning; call the
                 # agent directly so the caller gets exactly what it asked for.
+                log.debug("_run: loading agent %r from the local router", checkpoint)
                 agent = self._router.load(checkpoint)
+                log.debug("_run: agent loaded, calling system_one")
                 kwargs = {}
                 if request.task:
                     kwargs["task"] = request.task
                 if request.lang:
                     kwargs["lang"] = request.lang
                 raw = agent.system_one(request.state, questions)
+                log.debug("_run: system_one returned")
                 routing = RoutingInfo(
                     model=checkpoint, lang=request.lang, reason="explicit model selection"
                 )
             else:
+                log.debug("_run: routing via the router's own predict")
                 raw = self._router.predict(
                     request.state, questions, **self._route_kwargs(request)
                 )
