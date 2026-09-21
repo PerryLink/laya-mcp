@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    name: checks (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is not redundant here: the MCP stdio transport spawns with
+        # `shell: false`, and a console script is a `.cmd` shim on Windows that
+        # cannot be executed that way. That trap is invisible on Linux, and it is
+        # the reason the harness installer points at `python -m laya_mcp` rather
+        # than at the `laya-mcp` script.
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # `--no-deps` is deliberate, and it is the difference between a 40-second
+      # job and a ten-minute one. The declared dependency is `laya`, which pulls
+      # torch - roughly 2 GB - and nothing in these suites loads a model:
+      # `smoke_pure.py` and `install_harnesses.py` are pure, and
+      # `mcp_protocol.py` runs its OFFLINE half when no sidecar answers. Torch
+      # would buy nothing here. What these suites cover is our own code, and
+      # `import laya_mcp` is deliberately torch-free.
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install --no-deps -e .
+      - run: python -m pip install "mcp>=1.28,<2" pyyaml
+
+      # 101 checks of pure logic: validation, planning, calibration, errors, and
+      # every harness config dialect.
+      - run: python tests/smoke_pure.py
+      - run: python tests/install_harnesses.py
+
+      # The protocol layer, in OFFLINE mode against a port where nothing listens.
+      # That mode asserts the handshake, the tool list, and the structured refusal
+      # a harness gets when its backend is down - which is the state a harness is
+      # most likely to meet and the one nothing else covers.
+      - run: python tests/mcp_protocol.py
+        env:
+          LAYA_MCP_SIDECAR: http://127.0.0.1:9
+
+  package:
+    name: build and validate the distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip build twine
+      # The version is single-sourced from `laya_mcp.__version__`; a build that
+      # cannot resolve it fails here rather than at upload time.
+      - run: python -m build
+      # `twine check` renders the long description the way PyPI will. A README
+      # that looks fine locally and 400s on upload is a publish-day surprise.
+      - run: python -m twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
