@@ -7,6 +7,8 @@ forward pass. It is genuinely good, and it is a research artifact.
 
 This is the part that makes it survive contact with a server.
 
+[English](README.md) · [简体中文](README-zh.md) · [Español](README-es.md) · [Português](README-pt.md) · [हिन्दी](README-hi.md)
+
 ```bash
 pip install 'laya-mcp[mcp]'
 laya-mcp serve            # loads the model once, keeps it warm on 127.0.0.1:8787
@@ -69,6 +71,7 @@ and a **health surface** that reports a demotion.
 | **Device honesty** | Reports a silent CPU demotion, and `doctor` proves the GPU works by running a real op rather than trusting `torch.cuda.is_available()`. |
 | **Serialised inference** | A lock, by default. Laya is not thread-safe: `system_one` reassigns `self.device` and calls `self.model.to(...)` on an OOM, so concurrent calls can race a device move against a forward pass. |
 | **Restartable** | `DELETE /model` releases the model and empties the CUDA allocator cache, which `Router.unload` does not. A model server that leaks needs to be recyclable. |
+| **A `noul` that is not a constant** | Laya renders every `noul` as `false: ...` / `true: ...` and then answers "false" to essentially all of them — 40 of 40 items, both languages, exactly chance. The label word is what breaks it, not the primitive, so a `noul` that carries a boundary is asked as a two-option choice under neutral labels and read back as `P(true)`: **0.500 → 1.000** (English) and **0.975** (multilingual) on the same forty items. A `noul` with no boundary is sent unchanged and the response says why. |
 
 ---
 
@@ -191,10 +194,15 @@ accuracy is not there for your task, fit on your own domain or do not deploy it.
 python tests/smoke_pure.py         # 66 checks: validation, planning, calibration, errors
 python tests/install_harnesses.py  # 35 checks: every harness dialect, in a temp dir
 python tests/mcp_protocol.py       # 25 checks: a real MCP handshake and real tool calls
+python tests/stdio_latency.py      # handshake <5 s, tools/list instant, tools/call returns
+python tests/language_probe.py     # what each checkpoint can actually do, per language
 laya-mcp doctor                    # what is installed, and what the GPU can really do
 ```
 
-126 checks, and each suite covers a layer the others cannot reach.
+126 checks in the three suites, and each covers a layer the others cannot reach.
+`stdio_latency.py` and `language_probe.py` need a model and are measurements
+rather than assertions, so they are run by hand and their numbers are quoted
+above.
 
 `smoke_pure.py` needs no torch, model, network or harness config. `install_harnesses.py`
 redirects every harness into a temporary directory, because `~/.claude.json` is a
@@ -204,19 +212,30 @@ it would be a worse bug than any it could catch.
 `mcp_protocol.py` is the one that matters most and the one that was missing
 longest. It spawns the server exactly as a harness does
 (`python -m laya_mcp mcp`), performs the real `initialize` handshake with the
-official SDK, lists tools, and calls them through the sidecar to the model. Two
-real defects escaped the other suites and were caught only here: `FastMCP` in
-mcp 1.30 takes no `version` argument, so the server failed to start at all; and
-the token-budget warning was written into the DSH plugin's tool description but
-never into this server's, so a client using MCP could not have known that an
-oversized state is cut from the end.
+official SDK, lists tools, and calls them. Two real defects escaped the other
+suites and were caught only here: `FastMCP` in mcp 1.30 takes no `version`
+argument, so the server failed to start at all; and the token-budget warning was
+written into the DSH plugin's tool description but never into this server's, so a
+client using MCP could not have known that an oversized state is cut from the end.
 
-The harness dialects were additionally verified by letting the harnesses parse
-the files this tool writes: `codex mcp list --json` and `openclaw mcp list --json`
-both report the registered server with the correct stdio transport. For the other
-three the format is verified but harness acceptance is not, which is stated rather
-than implied — `pi` has no MCP support at all, and this machine's Hermes runtime is
-incomplete.
+Acceptance was then verified by letting the harnesses parse and *connect to* the
+files this tool writes, which is the only test that distinguishes a written file
+from an accepted one:
+
+| harness | how | result |
+|---|---|---|
+| opencode | `opencode mcp list` | ✓ connected |
+| claude | `claude mcp list` | √ Connected |
+| codex | `codex mcp list --json` | reports the server, stdio transport |
+| OpenClaw | `openclaw mcp list --json` | reports the server, stdio transport |
+| Hermes | — | unverified: `hermes --version` fails with "isolated runtime is not ready" on this machine |
+| `pi` | — | no native MCP support; `install` detects it and says so |
+
+That table is the reason `stdio_latency.py` exists. Every harness above gives an
+MCP server 30 seconds to finish `initialize`, and answering the handshake only
+after loading a checkpoint took 19 s uncontended and 275 s while another model
+held the GPU — so all of them reported "Failed to connect" on a config they had
+parsed perfectly. The load now runs behind the handshake.
 
 ## Licence
 
