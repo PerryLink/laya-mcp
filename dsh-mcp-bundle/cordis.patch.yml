@@ -1,0 +1,41 @@
+# Configuration-only bundle: no Host or Client entry files.
+#
+# Mounts the laya-mcp stdio server through the harness's own MCP client, so the
+# harness owns the process lifecycle. That is the point of this row: the
+# alternative is a sidecar the user keeps running themselves, and a background
+# server started from a session is reaped with the session, which is exactly the
+# wrong lifecycle for something meant to outlive it.
+#
+# `command` is the virtualenv's interpreter directly, NOT `npx laya-mcp` and not
+# the `laya-mcp` console script. Two reasons, both measured:
+#
+#   * The MCP stdio transport spawns with `shell: false`. On Windows the npm
+#     console-script shims are `.cmd` files, which cannot be executed that way —
+#     `spawn("npx", {shell:false})` is ENOENT and `spawn("npx.cmd", ...)` is
+#     EINVAL, while `spawn("cmd", ["/c", "npx", ...])` works. A real `.exe`
+#     sidesteps the whole problem.
+#   * The Node launcher has to go looking for an interpreter that can import
+#     `laya_mcp`, and on a machine where `python` on PATH is the Microsoft Store
+#     stub that search legitimately fails. Naming the interpreter here removes
+#     the search entirely.
+#
+# `--sidecar` points at a `laya-mcp serve` if one is running: that is the fast
+# path, one model load shared by every session. Without it this server loads its
+# own copy of the checkpoint in-process, which costs 10-20 s and roughly 650 MB
+# per session. If the sidecar is named but not running, every tool returns a
+# structured `sidecar_unreachable` error naming the fix — it does not hang, and
+# it does not silently degrade.
+- insert:
+    - id: laya-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: laya
+        transport: stdio
+        command: 'D:\Projects\laya-family\.venv-laya\Scripts\python.exe'
+        args:
+          - '-m'
+          - 'laya_mcp'
+          - 'mcp'
+          - '--sidecar'
+          - 'http://127.0.0.1:8787'
+        failOnStartupError: false

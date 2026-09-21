@@ -41,7 +41,7 @@ from typing import Any, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
 from . import __version__
-from .errors import LayacoreError
+from .errors import LayaMcpError
 from .protocol import PRIMITIVES, AskRequest, Question
 from .worker import LayaWorker, WorkerConfig
 
@@ -78,7 +78,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_error_payload(self, exc: LayacoreError) -> None:
+    def _send_error_payload(self, exc: LayaMcpError) -> None:
         self._send(exc.http_status, {"ok": False, **exc.to_dict()})
 
     def _read_json(self) -> Any:
@@ -144,7 +144,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         try:
             request = build_request(payload)
-        except LayacoreError as exc:
+        except LayaMcpError as exc:
             self._send_error_payload(exc)
             return
         try:
@@ -155,7 +155,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send(HTTPStatus.OK, {"ok": True, **self.worker.plan(request)})
                 return
             response = self.worker.ask(request)
-        except LayacoreError as exc:
+        except LayaMcpError as exc:
             log.info("ask failed: %s", exc)
             self._send_error_payload(exc)
             return
@@ -309,7 +309,7 @@ def serve(
     started = time.time()
     try:
         worker.start()
-    except LayacoreError as exc:
+    except LayaMcpError as exc:
         log.error("cannot start: %s", exc)
         return 3
     log.info("ready in %.1fs", time.time() - started)

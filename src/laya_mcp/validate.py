@@ -8,7 +8,7 @@ offending question, and all of them are indistinguishable from a bug in the
 model. The one real check is the option-budget ``ValueError``.
 
 So every check lives here, run before anything reaches Laya, and each raises a
-:class:`~laya_mcp.errors.LayacoreError` carrying the question id and a hint. This
+:class:`~laya_mcp.errors.LayaMcpError` carrying the question id and a hint. This
 is also where the rules that are *ours* rather than Laya's are enforced - an
 option-count ceiling, a score-level count, unique ids - and they are marked as
 ours so a future reader does not mistake them for upstream behaviour.

@@ -182,13 +182,13 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
     from .mcp_server import run_stdio
 
     try:
-        from .errors import LayacoreError
+        from .errors import LayaMcpError
     except Exception:  # noqa: BLE001
-        LayacoreError = Exception  # type: ignore[assignment,misc]
+        LayaMcpError = Exception  # type: ignore[assignment,misc]
 
     try:
         return run_stdio(sidecar=args.sidecar, tools=_parse_filter(args.filter))
-    except LayacoreError as exc:
+    except LayaMcpError as exc:
         # A structured failure still has to reach the client as a structured
         # failure; MCP carries the message, so print it to stderr and exit
         # non-zero rather than emitting a malformed frame.

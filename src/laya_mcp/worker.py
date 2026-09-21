@@ -25,7 +25,7 @@ for that and reports it, so a client is never silently served answers an order o
 magnitude slower than the ones it benchmarked.
 
 **Structured failure.** A bare ``KeyError`` from Laya becomes a
-:class:`~laya_mcp.errors.LayacoreError` with a code, the offending question id,
+:class:`~laya_mcp.errors.LayaMcpError` with a code, the offending question id,
 and a hint.
 
 **Lifecycle.** ``stop()`` releases the model and empties the CUDA cache, which
@@ -54,7 +54,7 @@ from .errors import (
     CapacityError,
     DeviceDegradedError,
     InvalidQuestionError,
-    LayacoreError,
+    LayaMcpError,
     OutOfMemoryError,
     StateTruncatedError,
     UnknownModelError,
@@ -162,7 +162,7 @@ class LayaWorker:
                 raise translate(RuntimeError(self._load_error))
             try:
                 self._load()
-            except LayacoreError:
+            except LayaMcpError:
                 raise
             except Exception as exc:  # noqa: BLE001
                 self._load_error = str(exc)
@@ -503,7 +503,7 @@ class LayaWorker:
                     request.state, questions, **self._route_kwargs(request)
                 )
                 routing = self._routing_from(raw, checkpoint)
-        except LayacoreError:
+        except LayaMcpError:
             self._failures += 1
             raise
         except Exception as exc:  # noqa: BLE001

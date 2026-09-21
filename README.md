@@ -140,9 +140,15 @@ curl -s localhost:8787/ask -H 'content-type: application/json' -d '{
 }'
 ```
 
-`GET /health`, `GET /capabilities`, `GET /version`, `POST /ask`,
+`GET /health`, `GET /capabilities`, `GET /version`, `POST /ask`, `POST /plan`,
 `DELETE /model`. Loopback only by default; binding elsewhere warns loudly, because
 there is no authentication.
+
+`POST /plan` takes the same body as `/ask` and returns the same `budget` block
+`/ask` reports, computed by the same `plan_questions` call — without a forward
+pass. It is how a client can ask "will this be cut?" before paying for an answer.
+On a cold host it pays a model *load*, which is not the same thing as an
+inference.
 
 ---
 

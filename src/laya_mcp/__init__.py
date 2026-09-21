@@ -40,16 +40,18 @@ from .errors import (
     ErrorCode,
     InternalError,
     InvalidQuestionError,
-    LayacoreError,
+    LayaMcpError,
     ModelUnavailableError,
     OutOfMemoryError,
     QuestionTooLargeError,
+    SidecarUnreachableError,
     StateTruncatedError,
     UnknownModelError,
     WeightsUnavailableError,
+    from_payload,
     translate,
 )
-from .planning import BudgetPlan, plan_questions, serialized_state_chars
+from .planning import BudgetPlan, plan_questions, request_text, script_caveat, serialized_state_chars
 from .protocol import (
     ANSWER_TYPES,
     PRIMITIVES,
@@ -68,22 +70,26 @@ __all__ = [
     "Capability",
     "read_capability",
     # errors
-    "LayacoreError",
+    "LayaMcpError",
     "ErrorCode",
     "InvalidQuestionError",
     "QuestionTooLargeError",
     "UnknownModelError",
     "ModelUnavailableError",
     "WeightsUnavailableError",
+    "SidecarUnreachableError",
     "OutOfMemoryError",
     "StateTruncatedError",
     "CapacityError",
     "DeviceDegradedError",
     "InternalError",
     "translate",
+    "from_payload",
     # planning
     "BudgetPlan",
     "plan_questions",
+    "request_text",
+    "script_caveat",
     "serialized_state_chars",
     # protocol
     "ANSWER_TYPES",

@@ -20,7 +20,7 @@ GPU out of memory                                ``torch.cuda.OutOfMemoryError``
 A ``KeyError`` that reaches an HTTP handler becomes a 500 and a stack trace; the
 same ``KeyError`` reaching an MCP tool becomes an opaque protocol error. Neither
 tells the caller that *they* passed a bad question type. So every one of these is
-translated into a :class:`LayacoreError` carrying a stable machine-readable
+translated into a :class:`LayaMcpError` carrying a stable machine-readable
 :class:`ErrorCode`, an HTTP status for the sidecar, and a message that names the
 offending question id.
 
@@ -62,6 +62,16 @@ class ErrorCode(str, Enum):
     """The weights could not be fetched from the Hub - a cold-start network
     problem rather than a bad request."""
 
+    SIDECAR_UNREACHABLE = "sidecar_unreachable"
+    """Nothing is answering at the sidecar URL.
+
+    Not an internal fault. It is the ordinary state of a harness that started
+    before its ``laya-mcp serve``, and it is retryable because the sidecar may
+    still be loading. Reporting it as ``internal`` - which is what happened
+    before this code existed - sent the caller looking for a bug in the wrong
+    program, and made the one structured error a user is most likely to meet the
+    least useful of them."""
+
     OUT_OF_MEMORY = "out_of_memory"
     """The device ran out of memory. Note that Laya's own recovery is a
     permanent, silent demotion to CPU: see :class:`OutOfMemoryError`."""
@@ -93,6 +103,7 @@ _HTTP_STATUS: Mapping[ErrorCode, int] = {
     ErrorCode.STATE_TRUNCATED: 400,
     ErrorCode.MODEL_UNAVAILABLE: 500,
     ErrorCode.WEIGHTS_UNAVAILABLE: 503,
+    ErrorCode.SIDECAR_UNREACHABLE: 503,
     ErrorCode.OUT_OF_MEMORY: 503,
     ErrorCode.DEVICE_DEGRADED: 503,
     ErrorCode.CAPACITY: 429,
@@ -100,7 +111,7 @@ _HTTP_STATUS: Mapping[ErrorCode, int] = {
 }
 
 
-class LayacoreError(Exception):
+class LayaMcpError(Exception):
     """Base class for every failure this package raises.
 
     Carries the things a caller needs to act: a stable :attr:`code`, a message,
@@ -160,12 +171,12 @@ class LayacoreError(Exception):
         return " ".join(parts)
 
 
-class InvalidQuestionError(LayacoreError):
+class InvalidQuestionError(LayaMcpError):
     """The question batch is malformed. Corresponds to Laya's ``KeyError``."""
     code = ErrorCode.INVALID_QUESTION
 
 
-class QuestionTooLargeError(LayacoreError):
+class QuestionTooLargeError(LayaMcpError):
     """The question's options cannot fit the checkpoint's option budget.
 
     This is Laya's only native validation, and its message does not say what to
@@ -174,22 +185,33 @@ class QuestionTooLargeError(LayacoreError):
     code = ErrorCode.QUESTION_TOO_LARGE
 
 
-class UnknownModelError(LayacoreError):
+class UnknownModelError(LayaMcpError):
     """The requested checkpoint name is not one the router knows."""
     code = ErrorCode.UNKNOWN_MODEL
 
 
-class ModelUnavailableError(LayacoreError):
+class ModelUnavailableError(LayaMcpError):
     """The checkpoint cannot be loaded. A startup fault, not a request fault."""
     code = ErrorCode.MODEL_UNAVAILABLE
 
 
-class WeightsUnavailableError(LayacoreError):
+class WeightsUnavailableError(LayaMcpError):
     """The weights could not be fetched. Cold-start network problem."""
     code = ErrorCode.WEIGHTS_UNAVAILABLE
 
 
-class OutOfMemoryError(LayacoreError):
+class SidecarUnreachableError(LayaMcpError):
+    """Nothing is listening at the sidecar URL.
+
+    Separate from the base class on purpose: the base defaults to
+    :attr:`ErrorCode.INTERNAL`, and "internal" tells a caller to look for a bug
+    in this package when the real answer is "the process you were supposed to
+    start is not running". 503 makes it retryable, which it is.
+    """
+    code = ErrorCode.SIDECAR_UNREACHABLE
+
+
+class OutOfMemoryError(LayaMcpError):
     """The device ran out of memory.
 
     Worth knowing: Laya handles this itself, and its handling is destructive.
@@ -197,13 +219,13 @@ class OutOfMemoryError(LayacoreError):
     the model to CPU in fp32, in place, permanently - and the ``Agent`` holds no
     flag saying so. A process that hits this once keeps answering, roughly 10-15x
     slower, and nothing in the response admits it. So this package tracks the
-    demotion itself (see :class:`~layacore.capability.Capability` and the
+    demotion itself (see :class:`~laya_mcp.capability.Capability` and the
     ``device`` field on a response) rather than trusting the library to recover.
     """
     code = ErrorCode.OUT_OF_MEMORY
 
 
-class StateTruncatedError(LayacoreError):
+class StateTruncatedError(LayaMcpError):
     """The state did not fit and was cut.
 
     Laya truncates the state from the *end* (``truncate_left=False`` in
@@ -214,28 +236,28 @@ class StateTruncatedError(LayacoreError):
     code = ErrorCode.STATE_TRUNCATED
 
 
-class CapacityError(LayacoreError):
+class CapacityError(LayaMcpError):
     """At the concurrency or memory ceiling. Retryable."""
     code = ErrorCode.CAPACITY
 
 
-class DeviceDegradedError(LayacoreError):
+class DeviceDegradedError(LayaMcpError):
     """Laya silently fell back to CPU. Retryable only by fixing the deployment."""
     code = ErrorCode.DEVICE_DEGRADED
 
 
-def translate(exc: BaseException, *, question_id: Optional[str] = None) -> LayacoreError:
-    """Map an exception from Laya onto a :class:`LayacoreError`.
+def translate(exc: BaseException, *, question_id: Optional[str] = None) -> LayaMcpError:
+    """Map an exception from Laya onto a :class:`LayaMcpError`.
 
     The order of the checks matters and mirrors how Laya actually behaves:
     ``KeyError`` is its generic "you gave me something I did not expect" for a
     bad type, a missing ``criteria``, and a missing ``instructions`` alike, so
     the message is inspected to say which.
 
-    Anything already a :class:`LayacoreError` passes through unchanged, so this
+    Anything already a :class:`LayaMcpError` passes through unchanged, so this
     is safe to call at every boundary.
     """
-    if isinstance(exc, LayacoreError):
+    if isinstance(exc, LayaMcpError):
         return exc
 
     if isinstance(exc, KeyError):
@@ -328,6 +350,60 @@ def translate(exc: BaseException, *, question_id: Optional[str] = None) -> Layac
     return InternalError(f"unexpected {name}: {exc}", cause=exc)
 
 
-class InternalError(LayacoreError):
+class InternalError(LayaMcpError):
     """A bug here, or a Laya failure not otherwise anticipated."""
     code = ErrorCode.INTERNAL
+
+
+#: Every concrete class, keyed by the code it carries.
+#:
+#: Defined at the end of the module because :class:`InternalError` is declared
+#: here, not with its siblings - it is the fallback :func:`translate` returns, and
+#: it reads better beside the branch that produces it.
+_BY_CODE: Mapping[ErrorCode, type[LayaMcpError]] = {
+    cls.code: cls
+    for cls in (
+        InvalidQuestionError,
+        QuestionTooLargeError,
+        UnknownModelError,
+        ModelUnavailableError,
+        WeightsUnavailableError,
+        SidecarUnreachableError,
+        OutOfMemoryError,
+        StateTruncatedError,
+        CapacityError,
+        DeviceDegradedError,
+        InternalError,
+    )
+}
+
+
+def from_payload(
+    payload: Mapping[str, Any], *, fallback: str = "the upstream server reported a failure"
+) -> LayaMcpError:
+    """Rebuild an error that arrived as JSON, keeping its code.
+
+    Without this every error crossing the sidecar hop comes back as the *base*
+    class, whose code is ``internal``. Measured: asking the MCP server for an
+    unknown question type returned ``error: "internal"`` for a response the
+    sidecar had labelled ``invalid_question`` with an HTTP 400 - so the one
+    worked example in the README ("``KeyError('ranking')`` becomes
+    ``invalid_question`` naming the type") was false for every caller that went
+    through MCP, which is the primary interface.
+
+    A code that does not survive the hop is not a code. The message, the
+    offending question id, the hint and the details all come across too, so the
+    rebuilt error is the same error rather than a summary of one.
+    """
+    raw = payload.get("error")
+    try:
+        code = ErrorCode(raw)
+    except ValueError:
+        code = ErrorCode.INTERNAL
+    details = payload.get("details")
+    return _BY_CODE.get(code, LayaMcpError)(
+        str(payload.get("message") or fallback),
+        question_id=payload.get("question_id") or None,
+        hint=payload.get("hint") or None,
+        details=details if isinstance(details, Mapping) else None,
+    )

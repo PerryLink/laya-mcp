@@ -34,7 +34,7 @@ def main() -> int:
     from laya_mcp.capability import Capability, normalise_checkpoint, read_capability
     from laya_mcp.errors import (
         InvalidQuestionError,
-        LayacoreError,
+        LayaMcpError,
         QuestionTooLargeError,
         translate,
     )
@@ -119,7 +119,7 @@ def main() -> int:
             check(label, False, "no error raised")
         except expected as exc:
             check(label, exc.question_id == "q", f"question_id={exc.question_id}")
-        except LayacoreError as exc:
+        except LayaMcpError as exc:
             check(label, False, f"raised {type(exc).__name__}")
 
     good = {
@@ -132,7 +132,7 @@ def main() -> int:
     try:
         validate_questions(good, capability=english)
         check("a well-formed batch passes", True)
-    except LayacoreError as exc:
+    except LayaMcpError as exc:
         check("a well-formed batch passes", False, str(exc))
 
     try:

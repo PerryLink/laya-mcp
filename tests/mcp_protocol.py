@@ -16,6 +16,17 @@ The sidecar is addressed over HTTP so the model is not loaded twice; start it wi
 `sidecar_unreachable`, which is itself asserted, because an MCP server that hangs
 instead of reporting an unreachable backend is worse than one that fails.
 
+So this runs in two modes and asserts whichever contract applies:
+
+* **sidecar up** - the handshake, the tool list, and real answers carried back
+  through the protocol, with the codes and caveats intact.
+* **sidecar down** - the same handshake and tool list (neither needs the model),
+  plus the structured refusal: a code naming the cause and a hint naming the fix.
+
+The second mode is what makes this suite runnable in CI. Nothing else covers the
+protocol layer, and a layer covered only on a machine that happens to have a GPU
+and a warm checkpoint is a layer that is not covered.
+
 Run:  python tests/mcp_protocol.py
 """
 
@@ -25,6 +36,8 @@ import asyncio
 import json
 import os
 import sys
+import urllib.error
+import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
@@ -32,6 +45,18 @@ FAILURES: list[str] = []
 CHECKS = 0
 
 SIDECAR = os.environ.get("LAYA_MCP_SIDECAR", "http://127.0.0.1:8787")
+
+
+def sidecar_reachable(url: str) -> bool:
+    """Whether a warm sidecar is answering. Decides which half of this suite runs."""
+    try:
+        with urllib.request.urlopen(f"{url.rstrip('/')}/health", timeout=3) as response:
+            return response.status == 200
+    except Exception:  # noqa: BLE001 - any failure at all means "not reachable"
+        return False
+
+
+LIVE = sidecar_reachable(SIDECAR)
 
 
 def check(label: str, condition: bool, detail: str = "") -> None:
@@ -71,6 +96,8 @@ async def main() -> int:
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
     )
 
+    print(f"mode: {'LIVE' if LIVE else 'OFFLINE'} - sidecar "
+          f"{'reachable' if LIVE else 'NOT reachable'} at {SIDECAR}")
     print(f"spawning: {sys.executable} -m laya_mcp mcp --sidecar {SIDECAR}\n")
 
     async with stdio_client(params) as (read, write):
@@ -152,23 +179,36 @@ async def main() -> int:
 
             if payload:
                 check("the tool result is JSON", True)
-                check("reports ok", payload.get("ok") is True, str(payload.get("error")))
-                check("carries the answers", "answers" in payload, str(list(payload.keys())))
-                if payload.get("ok"):
-                    check("names the checkpoint", payload.get("model") == "english",
-                          str(payload.get("model")))
-                    check("reports the device", bool(payload.get("device")), str(payload.get("device")))
-                    check("includes the confidence caveat",
-                          "NOT the probability" in (payload.get("confidence_semantics") or ""))
-                    answers = payload.get("answers") or {}
-                    check("both questions were answered", set(answers) == {"churn", "team"},
-                          str(sorted(answers)))
-                    churn = answers.get("churn") or {}
-                    check("the noul carries a band",
-                          churn.get("band") in ("no", "uncertain", "yes"), str(churn))
-                    team = answers.get("team") or {}
-                    check("the choice carries a distribution",
-                          isinstance(team.get("probabilities"), dict), str(team))
+                if not LIVE:
+                    # No sidecar. Nothing about the model can be asserted, but the
+                    # refusal can be: a code naming the cause, and a hint naming
+                    # the command that fixes it.
+                    check("refuses instead of hanging", payload.get("ok") is False,
+                          str(sorted(payload)))
+                    check("names the unreachable sidecar",
+                          payload.get("error") == "sidecar_unreachable",
+                          str(payload.get("error")))
+                    check("says what to run",
+                          "laya-mcp serve" in (payload.get("hint") or ""),
+                          str(payload.get("hint")))
+                else:
+                    check("reports ok", payload.get("ok") is True, str(payload.get("error")))
+                    check("carries the answers", "answers" in payload, str(list(payload.keys())))
+                    if payload.get("ok"):
+                        check("names the checkpoint", payload.get("model") == "english",
+                              str(payload.get("model")))
+                        check("reports the device", bool(payload.get("device")), str(payload.get("device")))
+                        check("includes the confidence caveat",
+                              "NOT the probability" in (payload.get("confidence_semantics") or ""))
+                        answers = payload.get("answers") or {}
+                        check("both questions were answered", set(answers) == {"churn", "team"},
+                              str(sorted(answers)))
+                        churn = answers.get("churn") or {}
+                        check("the noul carries a band",
+                              churn.get("band") in ("no", "uncertain", "yes"), str(churn))
+                        team = answers.get("team") or {}
+                        check("the choice carries a distribution",
+                              isinstance(team.get("probabilities"), dict), str(team))
 
             print("\ntools/call laya_plan")
             plan = await session.call_tool(
@@ -182,8 +222,13 @@ async def main() -> int:
             try:
                 plan_payload = json.loads(plan_text)
                 check("plan returns JSON", True)
-                check("plan reports token estimates",
-                      "state_tokens_estimated" in plan_payload, str(list(plan_payload.keys())))
+                if LIVE:
+                    check("plan reports token estimates",
+                          "state_tokens_estimated" in plan_payload, str(list(plan_payload.keys())))
+                else:
+                    check("plan refuses with the sidecar down",
+                          plan_payload.get("error") == "sidecar_unreachable",
+                          str(plan_payload.get("error")))
             except json.JSONDecodeError:
                 check("plan returns JSON", False, plan_text[:200])
 

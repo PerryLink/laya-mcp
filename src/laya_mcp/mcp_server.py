@@ -32,7 +32,7 @@ import sys
 from typing import Any, Mapping, Optional, Sequence
 
 from . import __version__
-from .errors import InvalidQuestionError, LayacoreError
+from .errors import InvalidQuestionError, LayaMcpError, SidecarUnreachableError, from_payload
 from .protocol import (
     PRIMITIVES,
     Answer,
@@ -166,26 +166,35 @@ def _post_json(url: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         try:
             detail = json.loads(exc.read().decode("utf-8"))
         except Exception:  # noqa: BLE001
-            raise LayacoreError(f"the sidecar returned HTTP {exc.code}") from exc
-        raise LayacoreError(
-            str(detail.get("message", f"the sidecar returned HTTP {exc.code}")),
-            hint=detail.get("hint"),
-        ) from exc
+            raise LayaMcpError(f"the sidecar returned HTTP {exc.code}") from exc
+        # Rebuild the sidecar's own error rather than wrapping it in the base
+        # class: the code is the part a caller branches on, and `invalid_question`
+        # arriving as `internal` sends them to debug the wrong program.
+        raise from_payload(detail, fallback=f"the sidecar returned HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
-        raise LayacoreError(
+        raise SidecarUnreachableError(
             f"cannot reach the sidecar at {url}: {exc.reason}",
             hint="start it with `laya-mcp serve`, or run without --sidecar to host the model here",
         ) from exc
 
 
 def _get_json(url: str) -> Mapping[str, Any]:
+    import urllib.error
     import urllib.request
 
     try:
         with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310
             return json.loads(response.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        raise SidecarUnreachableError(
+            f"cannot reach the sidecar at {url}: {exc.reason}",
+            hint="start it with `laya-mcp serve`, or run without --sidecar to host the model here",
+        ) from exc
     except Exception as exc:  # noqa: BLE001
-        raise LayacoreError(f"cannot reach the sidecar at {url}: {exc}") from exc
+        # Up, but not answering with JSON. That is a different fault from "not
+        # there", and saying "unreachable" for it would send the caller to check
+        # a process that is running perfectly well.
+        raise LayaMcpError(f"the sidecar at {url} returned an unusable response: {exc}") from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -218,7 +227,7 @@ def build_server(backend: Backend, tools: Optional[Sequence[str]] = None):
     try:
         from mcp.server.fastmcp import FastMCP
     except ImportError as exc:  # pragma: no cover
-        raise LayacoreError(
+        raise LayaMcpError(
             "the MCP SDK is not installed",
             hint="install the extra: pip install 'laya-mcp[mcp]'",
         ) from exc
@@ -366,7 +375,7 @@ def build_server(backend: Backend, tools: Optional[Sequence[str]] = None):
             """
             try:
                 plan = backend.plan(state, _batch(questions))
-            except LayacoreError as exc:
+            except LayaMcpError as exc:
                 return json.dumps({"ok": False, **exc.to_dict()}, ensure_ascii=False, indent=2)
             return json.dumps({"ok": True, **plan}, ensure_ascii=False, indent=2)
 
@@ -411,7 +420,7 @@ def _run(backend: Backend, state: Any, questions: Mapping[str, Question], *, str
         payload = backend.ask(
             AskRequest(state=state, questions=questions, strict=strict)
         )
-    except LayacoreError as exc:
+    except LayaMcpError as exc:
         return json.dumps({"ok": False, **exc.to_dict()}, ensure_ascii=False, indent=2)
     return json.dumps({"ok": True, **_trim(payload)}, ensure_ascii=False, indent=2)
 
