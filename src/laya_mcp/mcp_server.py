@@ -57,6 +57,21 @@ _CONFIDENCE_NOTE = (
     "right. For a yes/no question branch on `noul` directly."
 )
 
+#: The token-budget warning, which every tool that actually runs the model must
+#: carry. Laya cuts an oversized state from the END and shortens option text until
+#: labels stop being distinguishable, and it reports neither in its own payload.
+#: A caller that does not know this will read a confident answer about a fragment
+#: as an answer about the whole document. The `laya_ask` description below and the
+#: sibling DSH plugin's must agree on this; they did not, and the DSH one was the
+#: only place it was written down.
+_BUDGET_NOTE = (
+    "The checkpoint has a fixed token budget. An oversized state is truncated from the END "
+    "without appearing in the answer, and a question with many options has its option text "
+    "shortened until labels are no longer distinguishable. Read `truncated`, `budget_summary` "
+    "and `warnings` on the result before trusting an answer about a large document or a long "
+    "option list, or call `laya_plan` first to see what would be cut."
+)
+
 
 class Backend:
     """Where answers come from: a local model, or a sidecar over HTTP."""
@@ -208,7 +223,21 @@ def build_server(backend: Backend, tools: Optional[Sequence[str]] = None):
             hint="install the extra: pip install 'laya-mcp[mcp]'",
         ) from exc
 
-    server = FastMCP("laya", version=__version__)
+    # `FastMCP` takes `name` and `instructions` but no `version`; the SDK reports
+    # its own server version in the handshake. Passing one is a TypeError, which
+    # the protocol test caught and the pure tests could not: they never build the
+    # server. `instructions` is the one place to tell a client what this server is
+    # for before any tool is called, so it carries the same warning the tool
+    # descriptions do.
+    server = FastMCP(
+        "laya",
+        instructions=(
+            "Typed decision questions for Laya, a non-autoregressive decision model. It answers "
+            "noul (yes/no), choice and score questions and returns probabilities. It does not "
+            "generate text. Its `confidence` field is a concentration statistic, not the "
+            "probability of being correct."
+        ),
+    )
 
     def wanted(tool: str) -> bool:
         return tools is None or tool in tools
@@ -222,8 +251,8 @@ def build_server(backend: Backend, tools: Optional[Sequence[str]] = None):
                 "email, a ticket, a document) and get calibrated probabilities back. Each "
                 "question is `noul` (yes/no), `choice` (pick one of a fixed set) or `score` "
                 "(place on an ordered scale). Use this instead of reading the state yourself "
-                "when the answer is a decision rather than a summary. " + _NOT_FOR_PROSE + " " +
-                _CONFIDENCE_NOTE
+                "when the answer is a decision rather than a summary.\n\n" + _BUDGET_NOTE + " " +
+                _NOT_FOR_PROSE + " " + _CONFIDENCE_NOTE
             ),
         )
         def laya_ask(state: Any, questions: dict[str, Any]) -> str:
@@ -250,7 +279,7 @@ def build_server(backend: Backend, tools: Optional[Sequence[str]] = None):
                 "probability, not a decision: 0.51 is a coin toss, and the result includes a "
                 "`band` of no/uncertain/yes. Supply `boundary` whenever the line between yes "
                 "and no is not obvious - a probability whose boundary is unstated cannot be "
-                "read. " + _NOT_FOR_PROSE
+                "read. " + _BUDGET_NOTE + " " + _NOT_FOR_PROSE
             ),
         )
         def laya_noul(
@@ -279,7 +308,7 @@ def build_server(backend: Backend, tools: Optional[Sequence[str]] = None):
                 "the full distribution over the options. Options need descriptions: two bare "
                 "labels are often indistinguishable to the model, and the description is what "
                 "separates them. Accuracy falls off sharply above roughly 20 options. " +
-                _NOT_FOR_PROSE
+                _BUDGET_NOTE + " " + _NOT_FOR_PROSE
             ),
         )
         def laya_choice(state: Any, instructions: str, options: dict[str, Any]) -> str:
@@ -302,7 +331,7 @@ def build_server(backend: Backend, tools: Optional[Sequence[str]] = None):
                 "the distribution. Levels must be passed in ascending order, because position "
                 "IS the score. Note that this is Laya's weakest primitive in independent "
                 "measurement, so prefer `laya_choice` when the levels can be treated as "
-                "unordered. " + _NOT_FOR_PROSE
+                "unordered. " + _BUDGET_NOTE + " " + _NOT_FOR_PROSE
             ),
         )
         def laya_score(state: Any, instructions: str, levels: list[str]) -> str:

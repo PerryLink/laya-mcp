@@ -184,13 +184,26 @@ accuracy is not there for your task, fit on your own domain or do not deploy it.
 ```bash
 python tests/smoke_pure.py         # 66 checks: validation, planning, calibration, errors
 python tests/install_harnesses.py  # 35 checks: every harness dialect, in a temp dir
+python tests/mcp_protocol.py       # 25 checks: a real MCP handshake and real tool calls
 laya-mcp doctor                    # what is installed, and what the GPU can really do
 ```
 
-Neither test needs torch, a model, a network, or a real harness config. The
-installer test redirects every harness into a temporary directory, because
-`~/.claude.json` is a large shared file holding history and per-project state and
-a test that clobbered it would be a worse bug than any it could catch.
+126 checks, and each suite covers a layer the others cannot reach.
+
+`smoke_pure.py` needs no torch, model, network or harness config. `install_harnesses.py`
+redirects every harness into a temporary directory, because `~/.claude.json` is a
+large shared file holding history and per-project state and a test that clobbered
+it would be a worse bug than any it could catch.
+
+`mcp_protocol.py` is the one that matters most and the one that was missing
+longest. It spawns the server exactly as a harness does
+(`python -m laya_mcp mcp`), performs the real `initialize` handshake with the
+official SDK, lists tools, and calls them through the sidecar to the model. Two
+real defects escaped the other suites and were caught only here: `FastMCP` in
+mcp 1.30 takes no `version` argument, so the server failed to start at all; and
+the token-budget warning was written into the DSH plugin's tool description but
+never into this server's, so a client using MCP could not have known that an
+oversized state is cut from the end.
 
 The harness dialects were additionally verified by letting the harnesses parse
 the files this tool writes: `codex mcp list --json` and `openclaw mcp list --json`
