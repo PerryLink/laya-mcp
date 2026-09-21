@@ -31,7 +31,7 @@ Two things this package deliberately does not do:
 
 from __future__ import annotations
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 from .capability import Capability, read_capability
 from .errors import (
