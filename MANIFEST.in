@@ -1,0 +1,18 @@
+# Files the sdist carries beyond what setuptools finds on its own.
+#
+# setuptools already includes README.md, LICENSE, pyproject.toml and the package
+# sources. Everything else at the repository root is dropped silently, which is
+# how SKILL.md and the four translated READMEs would ship with the repository but
+# not with the distribution - and a `pip download --no-binary` user would get
+# documentation that stops at one language and no skill at all.
+#
+# The wheel is deliberately untouched: it carries the importable package and
+# nothing else. Nothing in `laya_mcp` reads SKILL.md, so this changes what a
+# source consumer can read, not what the installed package can do.
+
+include SKILL.md
+include README.md
+include README-zh.md
+include README-es.md
+include README-pt.md
+include README-hi.md
