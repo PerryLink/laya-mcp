@@ -182,9 +182,22 @@ accuracy is not there for your task, fit on your own domain or do not deploy it.
 ## Verify
 
 ```bash
-python tests/smoke_pure.py    # 64 checks, no torch, no model, no network
-laya-mcp doctor               # what is installed, and what the GPU can really do
+python tests/smoke_pure.py         # 66 checks: validation, planning, calibration, errors
+python tests/install_harnesses.py  # 35 checks: every harness dialect, in a temp dir
+laya-mcp doctor                    # what is installed, and what the GPU can really do
 ```
+
+Neither test needs torch, a model, a network, or a real harness config. The
+installer test redirects every harness into a temporary directory, because
+`~/.claude.json` is a large shared file holding history and per-project state and
+a test that clobbered it would be a worse bug than any it could catch.
+
+The harness dialects were additionally verified by letting the harnesses parse
+the files this tool writes: `codex mcp list --json` and `openclaw mcp list --json`
+both report the registered server with the correct stdio transport. For the other
+three the format is verified but harness acceptance is not, which is stated rather
+than implied — `pi` has no MCP support at all, and this machine's Hermes runtime is
+incomplete.
 
 ## Licence
 
