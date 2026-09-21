@@ -60,7 +60,7 @@ from .errors import (
     UnknownModelError,
     translate,
 )
-from .planning import BudgetPlan, plan_questions
+from .planning import BudgetPlan, plan_questions, script_caveat
 from .protocol import (
     Answer,
     AskRequest,
@@ -375,6 +375,7 @@ class LayaWorker:
             raise UnknownModelError("no checkpoint is loaded")
 
         plan: BudgetPlan = plan_questions(capability, request.state, request.questions)
+        plan.warnings = (*plan.warnings, *self._request_warnings(request, capability))
         if (request.strict or self.config.strict) and not plan.fits:
             raise StateTruncatedError(
                 "the state does not fit this checkpoint's token budget",
@@ -398,6 +399,55 @@ class LayaWorker:
             return self._run(request, checkpoint, capability, plan)
         finally:
             self._lock.release()
+
+    def plan(self, request: AskRequest) -> dict[str, Any]:
+        """What :meth:`ask` would do to the state, without a forward pass.
+
+        The same ``plan_questions`` call :meth:`ask` makes, over the same
+        capability and the same request, so the two cannot report different
+        numbers. Exposed on its own because "will this be cut?" is a question a
+        caller should be able to ask for free: a cold host pays a model *load*
+        here - loading weights is not inferring with them - and then computes
+        nothing at all.
+        """
+        self.start()
+        validate_questions(request.questions)
+        checkpoint = self._resolve_checkpoint(request)
+        capability = self._capabilities.get(checkpoint) or next(
+            iter(self._capabilities.values()), None
+        )
+        if capability is None:  # pragma: no cover - start() guarantees one
+            raise UnknownModelError("no checkpoint is loaded")
+
+        plan: BudgetPlan = plan_questions(capability, request.state, request.questions)
+        plan.warnings = (*plan.warnings, *self._request_warnings(request, capability))
+        return plan.to_dict()
+
+    def _request_warnings(
+        self, request: AskRequest, capability: Capability
+    ) -> tuple[str, ...]:
+        """Warnings about a request this checkpoint cannot actually serve.
+
+        Both conditions used to pass in silence, which is the one thing this
+        package exists not to do.
+        """
+        warnings: list[str] = []
+        if request.lang:
+            # Not an oversight to be fixed by forwarding it: Laya's own
+            # `system_one(state, questions)` takes no language argument, so there
+            # is nowhere for the value to go, and naming `lang` is what selects
+            # this path in the first place - the router, which is the only
+            # component that reads `lang`, is bypassed by asking for it.
+            warnings.append(
+                f"lang={request.lang!r} was not applied. Laya's `system_one(state, questions)` "
+                "takes no language argument, so the override is dropped; naming `lang` also "
+                "takes the explicit path, which bypasses the router - the one component that "
+                "does read it. Omit `lang` to let the router route on the text itself."
+            )
+        caveat = script_caveat(capability, request.state, request.questions)
+        if caveat:
+            warnings.append(caveat)
+        return tuple(warnings)
 
     def _resolve_checkpoint(self, request: AskRequest) -> str:
         """Which checkpoint will answer.

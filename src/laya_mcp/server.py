@@ -131,7 +131,7 @@ class _Handler(BaseHTTPRequestHandler):
         # one base URL. It takes the same body as `/ask`; the compatibility is at
         # the transport and envelope level, not a claim to reproduce every field of
         # a closed API this project has no access to.
-        if path not in ("/ask", "/v1/ask", "/v1/systemone"):
+        if path not in ("/ask", "/v1/ask", "/v1/systemone", "/plan", "/v1/plan"):
             self._send(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found", "path": path})
             return
         try:
@@ -148,6 +148,12 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_error_payload(exc)
             return
         try:
+            if path in ("/plan", "/v1/plan"):
+                # The preflight as an endpoint, not just as a field on a response
+                # that has already cost a forward pass. Same arithmetic `/ask`
+                # uses, so a caller cannot be told two different things.
+                self._send(HTTPStatus.OK, {"ok": True, **self.worker.plan(request)})
+                return
             response = self.worker.ask(request)
         except LayacoreError as exc:
             log.info("ask failed: %s", exc)
@@ -179,6 +185,27 @@ class _Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
     worker: LayaWorker
+
+    def handle_error(self, request: Any, client_address: Any) -> None:  # noqa: D102
+        """Keep a client hanging up out of the error log.
+
+        The stdlib handler prints a full traceback for *any* exception raised
+        while serving a request. With HTTP/1.1 keep-alive, the single most common
+        exception is the client closing its connection between requests, which
+        arrives as `ConnectionResetError` (WinError 10054 on Windows) from
+        `rfile.readline`. That is not a fault: a client is entitled to disconnect,
+        and a liveness probe that opens and drops a socket will do it constantly.
+
+        Left alone, one such disconnect prints roughly twenty lines of traceback,
+        which buries the lines that matter and makes a healthy server look broken
+        to whoever is reading the log. So a peer disconnect is logged at debug
+        level and everything else is handed to the base class unchanged.
+        """
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+            log.debug("client %s disconnected mid-request: %s", client_address, exc)
+            return
+        super().handle_error(request, client_address)
 
 
 def build_request(payload: Any) -> AskRequest:

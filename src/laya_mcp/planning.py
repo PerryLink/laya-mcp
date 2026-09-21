@@ -146,6 +146,55 @@ def _render_value(value: Any) -> str:
         return str(value)
 
 
+def request_text(state: Any, questions: Mapping[str, Question]) -> str:
+    """Every character of a request that reaches the model.
+
+    The state, each question's instructions, and all the option text - not just
+    the state. Laya renders one sequence, so a Chinese question asked about an
+    English document is still a Chinese request.
+    """
+    parts: list[str] = [state if isinstance(state, str) else _render_value(state)]
+    for question in questions.values():
+        parts.append(_render_value(question.instructions))
+        criteria = question.criteria
+        if isinstance(criteria, Mapping):
+            for label, description in criteria.items():
+                parts.append(str(label))
+                if description is not None and description != "":
+                    parts.append(_render_value(description))
+        elif isinstance(criteria, (list, tuple)):
+            parts.extend(_render_value(item) for item in criteria)
+    return "\n".join(parts)
+
+
+def script_caveat(
+    capability: Capability, state: Any, questions: Mapping[str, Question]
+) -> Optional[str]:
+    """A warning when the request is in a script this checkpoint cannot read.
+
+    The published caveat covers only half of the problem. Laya's detector names
+    seven Latin-script languages and treats everything else as English, and
+    ``languages_reliably_detected`` says so - but a Khmer or Chinese request is
+    not "another Latin-script language", it is text the encoder has no vocabulary
+    for. Upstream measures 0.000 accuracy on Khmer at 0.952 confidence, and the
+    response said nothing at all. This is that missing sentence.
+
+    ``english`` and ``typed-decisions`` are both English-encoder checkpoints, so
+    only ``multilingual`` is exempt.
+    """
+    if capability.checkpoint == "multilingual":
+        return None
+    if not _looks_non_latin(request_text(state, questions)):
+        return None
+    return (
+        f"the request is mostly non-Latin script and `{capability.checkpoint}` cannot read it: "
+        "the detector covers en/fr/de/es/pt/it/nl and assumes English for everything else, so "
+        "these probabilities are not meaningful - upstream measures 0.000 accuracy on Khmer at "
+        "0.952 confidence. Serve the multilingual checkpoint (`laya-mcp serve --model "
+        "multilingual`) for non-Latin text, and treat an answer from this one as unusable."
+    )
+
+
 @dataclass
 class QuestionPlan:
     """The budget for one question in a batch."""
