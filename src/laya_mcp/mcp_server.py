@@ -86,6 +86,23 @@ class Backend:
             self._worker = LayaWorker(self._config)
         return self._worker
 
+    def warm(self) -> None:
+        """Load the model now, on the calling thread.
+
+        Called before an event loop exists, so the heavy imports and the
+        checkpoint load happen where blocking is harmless. A no-op when a sidecar
+        is configured: the model is not this process's to load.
+        """
+        if self.sidecar:
+            return
+        self._local().start()
+
+    def close(self) -> None:
+        """Release the model if this process owns one."""
+        if self._worker is not None:
+            self._worker.stop()
+            self._worker = None
+
     def ask(self, request: AskRequest) -> Mapping[str, Any]:
         if self.sidecar:
             return _post_json(
@@ -144,10 +161,6 @@ class Backend:
         if capability is None:
             raise InvalidQuestionError("no checkpoint is loaded")
         return plan_questions(capability, state, questions).to_dict()
-
-    def close(self) -> None:
-        if self._worker is not None:
-            self._worker.stop()
 
 
 def _post_json(url: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -422,7 +435,20 @@ def _run(backend: Backend, state: Any, questions: Mapping[str, Question], *, str
         )
     except LayaMcpError as exc:
         return json.dumps({"ok": False, **exc.to_dict()}, ensure_ascii=False, indent=2)
-    return json.dumps({"ok": True, **_trim(payload)}, ensure_ascii=False, indent=2)
+    rendered = json.dumps({"ok": True, **_trim(payload)}, ensure_ascii=False, indent=2)
+    return rendered
+
+
+def _trace(message: str) -> None:
+    """Write a line to stderr when ``LAYA_MCP_TRACE`` is set.
+
+    Straight to the stream rather than through ``logging``, because the question
+    this answers is "did this code run at all", and a logger whose level or
+    handler is misconfigured answers that with silence - which is exactly the
+    ambiguity that made a hung tool call hard to place.
+    """
+    if os.environ.get("LAYA_MCP_TRACE"):
+        print(f"[trace] {message}", file=sys.stderr, flush=True)
 
 
 def _trim(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -463,6 +489,31 @@ def run_stdio(
         return 2
 
     backend = Backend(sidecar=sidecar, config=config)
+
+    # Warm the model BEFORE `server.run()` enters the asyncio loop.
+    #
+    # FastMCP dispatches a synchronous tool on the event-loop thread, so without
+    # this the first tool call performs `import torch` and the checkpoint load
+    # *inside a running loop*. That path hangs: it was reproduced with the MCP SDK
+    # in the driver's seat (handshake in 0.4 s, then no response to `tools/call`
+    # for 120 s, with a stack dump showing the worker parked inside the numpy
+    # import), while the identical load completes in 8-13 s when called directly,
+    # from a thread, on a running loop without the MCP transport, and under every
+    # environment override the failing case used. Those four all reproduce
+    # successfully, which is why the difference is placement and not the work.
+    #
+    # Warming here is also the better design regardless of the hang: the cost is
+    # paid once at startup, where a client expects a server to be slow to come up,
+    # instead of on the first request, where it looks like a timeout.
+    if sidecar is None:
+        try:
+            backend.warm()
+        except LayaMcpError as exc:
+            # Report and carry on rather than refusing to start: a client that can
+            # see the tool list and a structured error is better served than one
+            # whose server never appeared.
+            print(f"laya-mcp: could not preload the model: {exc}", file=sys.stderr)
+
     try:
         server = build_server(backend, tools)
         server.run(transport="stdio")

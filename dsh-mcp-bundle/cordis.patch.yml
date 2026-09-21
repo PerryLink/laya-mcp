@@ -19,12 +19,33 @@
 #     stub that search legitimately fails. Naming the interpreter here removes
 #     the search entirely.
 #
-# `--sidecar` points at a `laya-mcp serve` if one is running: that is the fast
-# path, one model load shared by every session. Without it this server loads its
-# own copy of the checkpoint in-process, which costs 10-20 s and roughly 650 MB
-# per session. If the sidecar is named but not running, every tool returns a
-# structured `sidecar_unreachable` error naming the fix — it does not hang, and
-# it does not silently degrade.
+# `--model-root` matters more than it looks. Without it, `--model english` resolves
+# through the Hub: the server reaches out to huggingface.co, and if the cache is
+# cold it downloads ~800 MB and then re-verifies 38 files on every start. Measured
+# here — a start with no model root pulled 1.1 GB into the HF cache while an
+# identical checkpoint already sat on disk. With the root named, startup reads the
+# local snapshot and makes no network call at all, which also means it works
+# offline and behind a proxy.
+#
+# `--sidecar` is deliberately ABSENT. Pointing this at a `laya-mcp serve` is
+# faster — one model load shared by every session, ~175 ms per call — but it makes
+# every tool call fail until someone has a sidecar running, and a sidecar started
+# from a session is reaped with that session. The default here is the one that
+# works after a reboot: this server hosts the model itself, paying 10-20 s and
+# roughly 650 MB once per session.
+#
+# To switch to the shared sidecar, start one yourself in its own terminal:
+#
+#     laya-mcp serve --model-root <same path> --device cuda --port 8787
+#
+# then add these two entries back under `args`:
+#
+#     - '--sidecar'
+#     - 'http://127.0.0.1:8787'
+#
+# With the flag present but nothing listening, every call returns a structured
+# `sidecar_unreachable` naming that fix — it does not hang, and it does not
+# silently fall back.
 - insert:
     - id: laya-mcp
       name: '@deepseek-ai/dsh-mcp-client'
@@ -36,6 +57,6 @@
           - '-m'
           - 'laya_mcp'
           - 'mcp'
-          - '--sidecar'
-          - 'http://127.0.0.1:8787'
+          - '--model-root'
+          - 'D:\Projects\laya-family\_models\laya'
         failOnStartupError: false

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import gc
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -383,9 +384,7 @@ class LayaWorker:
 
     def ask(self, request: AskRequest) -> AskResponse:
         """Run one batch. The whole public surface of the model host."""
-        log.debug("ask: entering (loaded=%s)", self._loaded)
         self.start()
-        log.debug("ask: model ready")
 
         # Validation and planning happen before the lock: they are pure and a bad
         # request should not queue behind a good one.
@@ -394,7 +393,6 @@ class LayaWorker:
         capability = self._capability_for(checkpoint)
 
         plan: BudgetPlan = plan_questions(capability, request.state, request.questions)
-        log.debug("ask: planned (fits=%s, checkpoint=%s)", plan.fits, checkpoint)
         plan.warnings = (*plan.warnings, *self._request_warnings(request, capability))
         if (request.strict or self.config.strict) and not plan.fits:
             raise StateTruncatedError(

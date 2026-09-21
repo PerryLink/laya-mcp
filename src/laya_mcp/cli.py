@@ -115,14 +115,44 @@ def build_parser() -> argparse.ArgumentParser:
         "--sidecar", default=None,
         help=(
             "base URL of a running `laya-mcp serve`, e.g. http://127.0.0.1:8787. "
-            "Recommended: without it this process hosts the model itself, so every session "
-            "pays the full load cost."
+            "Faster when you have one: a single model load shared by every session. "
+            "Without it this process hosts the model itself, which is slower per session "
+            "but works with nothing else running."
         ),
     )
     mcp.add_argument(
         "--filter", default=None,
         help="expose only these tools, comma separated (e.g. noul,choice)",
     )
+    # The model options are mirrored from `serve` on purpose. A harness registers
+    # this command in a config file it never revisits, so anything it cannot pass
+    # here it cannot configure at all - and the failure is silent, because the
+    # process starts, reaches for the Hub, and only then disappoints. `mcp` had
+    # none of these while the bundle that mounts it passed `--model-root`, which
+    # would have failed at startup with "unrecognized arguments".
+    mcp.add_argument(
+        "--model", default="english",
+        help="checkpoint to host when there is no sidecar: english, multilingual, typed-decisions",
+    )
+    mcp.add_argument(
+        "--also", action="append", default=[],
+        help="an additional checkpoint to host (repeatable)",
+    )
+    mcp.add_argument("--device", default=None, help="cpu, cuda, or mps (default: auto)")
+    mcp.add_argument(
+        "--model-root", default=None,
+        help=(
+            "a local checkpoint directory; avoids any Hub access. Worth setting even when the "
+            "weights are cached: without it the server reaches the Hub and re-verifies every "
+            "file on each start, and on a cold cache downloads ~800 MB."
+        ),
+    )
+    mcp.add_argument("--max-len", type=int, default=None, help="override the token budget")
+    mcp.add_argument(
+        "--head-max-len", type=int, default=None,
+        help="override the per-question option+instruction budget (the high-cardinality fix)",
+    )
+    mcp.add_argument("--calibration", default=None, help="path to a calibration store JSON")
 
     # -- doctor --------------------------------------------------------------
     doctor = sub.add_parser(
@@ -179,15 +209,28 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
 def _cmd_mcp(args: argparse.Namespace) -> int:
     _prepare_environment()
+    from .errors import LayaMcpError
     from .mcp_server import run_stdio
+    from .worker import WorkerConfig
+
+    # The model options are only meaningful without a sidecar, but they are
+    # accepted either way and simply unused when one is configured: a harness
+    # writes this command into a config file once, and rejecting an argument it
+    # passes would turn a harmless redundancy into a server that will not start.
+    config = WorkerConfig(
+        model=args.model,
+        also=tuple(args.also or ()),
+        device=args.device,
+        model_root=args.model_root,
+        max_len=args.max_len,
+        head_max_len=args.head_max_len,
+        calibration_path=args.calibration,
+    )
 
     try:
-        from .errors import LayaMcpError
-    except Exception:  # noqa: BLE001
-        LayaMcpError = Exception  # type: ignore[assignment,misc]
-
-    try:
-        return run_stdio(sidecar=args.sidecar, tools=_parse_filter(args.filter))
+        return run_stdio(
+            sidecar=args.sidecar, tools=_parse_filter(args.filter), config=config
+        )
     except LayaMcpError as exc:
         # A structured failure still has to reach the client as a structured
         # failure; MCP carries the message, so print it to stderr and exit
