@@ -1,0 +1,35 @@
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+.venv-*/
+venv/
+
+# Test and type caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Model weights and local scratch. A checkpoint is ~650 MB and is fetched on
+# demand into the Hub cache or a --model-root; it must never be committed.
+_models/
+_wheels/
+_upstream-src/
+*.safetensors
+*.bin
+
+# Calibration stores hold fitted temperatures for a specific checkpoint. They are
+# portable and small, so a user may reasonably want to commit one - but not by
+# accident, and not the default path.
+calibration.json

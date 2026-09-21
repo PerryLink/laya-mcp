@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "laya-mcp"
+version = "0.1.0"
+description = "MCP server for Laya typed decisions: a warm model sidecar, token-budget preflight, a persisted calibration store, and honest confidence."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [{ name = "PerryLink" }]
+keywords = ["laya", "mcp", "mcp-server", "decision-model", "system-one", "calibration", "typed-decisions"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# `laya` pulls torch + transformers, which is nearly all of the install weight.
+# It is a hard dependency because the server is useless without a model, but the
+# stdio path imports it lazily so `doctor` and `--help` stay instant.
+dependencies = [
+  "laya>=0.3.4,<0.4",
+]
+
+[project.optional-dependencies]
+# The persistent HTTP sidecar. An extra, so the pure planning / validation /
+# calibration logic stays importable with no web stack installed.
+server = ["fastapi>=0.110", "uvicorn>=0.27"]
+# Model Context Protocol. v1 is pinned deliberately: the Python SDK's v2 release
+# removed the `FastMCP` export, and a server that breaks on a transitive major
+# bump is worse than one that pins.
+mcp = ["mcp>=1.28,<2"]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.urls]
+Homepage = "https://github.com/PerryLink/laya-mcp"
+Repository = "https://github.com/PerryLink/laya-mcp"
+Issues = "https://github.com/PerryLink/laya-mcp/issues"
+
+[project.scripts]
+laya-mcp = "laya_mcp.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["laya_mcp"]
+
+[tool.setuptools.package-data]
+laya_mcp = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
