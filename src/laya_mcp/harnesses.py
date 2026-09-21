@@ -10,7 +10,7 @@ Claude Code  ``~/.claude.json`` (or a project ``.mcp.json``)  JSON   ``mcpServer
 Codex        ``~/.codex/config.toml``                     TOML       ``[mcp_servers.<name>]``
 opencode     ``~/.config/opencode/opencode.json[c]``      JSON       ``mcp``
 OpenClaw     ``~/.openclaw/openclaw.json``                JSON       ``mcp.servers``
-Hermes       ``~/.hermes/config.yaml``                    YAML       ``mcp_servers``
+Hermes       ``<hermes home>/config.yaml``               YAML       ``mcp_servers``
 ===========  ==========================================  =========  ==========================
 
 Four different top-level keys, three serializations, and opencode disagrees three
@@ -452,8 +452,28 @@ def _openclaw_path() -> Optional[Path]:
 
 
 def _hermes_path() -> Optional[Path]:
-    override = os.environ.get("HERMES_HOME")
-    return (Path(override) if override else _home() / ".hermes") / "config.yaml"
+    """Where Hermes keeps its config, which is *not* ``~/.hermes`` on Windows.
+
+    Read from Hermes' own ``hermes_constants._get_platform_default_hermes_home``:
+
+        if sys.platform == "win32":
+            return Path(os.environ["LOCALAPPDATA"]) / "hermes"
+        return Path.home() / ".hermes"
+
+    and ``HERMES_HOME`` overrides both. Writing ``~/.hermes/config.yaml`` on
+    Windows produces a file the harness never reads, which is the worst version of
+    this failure: the installer reports success, the file looks right, and
+    `hermes mcp list` says "No MCP servers configured" with nothing to explain the
+    gap. Verified by writing the file and asking Hermes to list it.
+    """
+    override = os.environ.get("HERMES_HOME", "").strip()
+    if override:
+        return Path(override) / "config.yaml"
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA", "").strip()
+        base = Path(local) if local else _home() / "AppData" / "Local"
+        return base / "hermes" / "config.yaml"
+    return _home() / ".hermes" / "config.yaml"
 
 
 # --------------------------------------------------------------------------- #
@@ -506,11 +526,13 @@ HARNESSES: tuple[Harness, ...] = (
         label="Hermes",
         config_path=_hermes_path,
         fmt="yaml",
-        location="`mcp_servers.<name>` in ~/.hermes/config.yaml",
+        location="`mcp_servers.<name>` in the Hermes home (`HERMES_HOME`, else the platform default)",
         write=_write_hermes,
-        # The CLI is not used to verify: its local-stdio flags are undocumented and
-        # the runtime is not always present, so the file is the reliable artefact.
-        verify=None,
+        # Verifiable after all. This used to be None, on the grounds that the
+        # runtime is not always present - and that is how a wrong config path
+        # survived: the installer reported success, the file looked right, and
+        # nothing ever asked Hermes whether it could see the server. It could not.
+        verify=("hermes", "mcp", "list"),
         detect=("hermes",),
     ),
     Harness(
@@ -694,12 +716,20 @@ def _report_verification(harness: Harness) -> None:
     without changing the exit code.
     """
     assert harness.verify is not None
+    argv = _launchable(list(harness.verify))
     try:
         completed = subprocess.run(  # noqa: S603 - a fixed argv from our own table
-            list(harness.verify),
+            argv,
             capture_output=True,
             text=True,
-            timeout=20,
+            # These CLIs print UTF-8 - box drawing, check marks, non-ASCII paths -
+            # and without this, `text=True` decodes with the console code page
+            # instead. On a GBK console that raises inside subprocess's reader
+            # thread, stdout comes back empty, and the verification reports "ran
+            # but did not list" for a server the harness had just listed.
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
             check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -714,6 +744,28 @@ def _report_verification(harness: Harness) -> None:
             print(f"               harness reports: {line.strip()}")
             return
     print(f"               `{' '.join(harness.verify)}` ran but did not list `{DEFAULT_SERVER_NAME}`")
+
+
+def _launchable(argv: list[str]) -> list[str]:
+    """Make a harness lister actually runnable on Windows.
+
+    Every one of these CLIs is installed by npm, and npm writes a ``.cmd`` shim
+    next to the real entry point. ``shutil.which`` finds it - ``.CMD`` is in
+    PATHEXT - but ``CreateProcess`` cannot execute it, so the call fails with
+    ``WinError 2``: "the system cannot find the file specified", for a file that
+    plainly exists. This is the same trap the MCP registration already avoids by
+    pointing harnesses at ``python -m laya_mcp`` rather than the console script.
+
+    The cost of not handling it was concrete: the verification step silently
+    degraded to "(could not run ...)", which is why nothing noticed that Hermes
+    reads its config from a different directory on Windows.
+    """
+    if sys.platform != "win32" or not argv:
+        return argv
+    resolved = shutil.which(argv[0])
+    if resolved and resolved.lower().endswith((".cmd", ".bat")):
+        return ["cmd.exe", "/c", resolved, *argv[1:]]
+    return argv
 
 
 def describe_targets() -> int:

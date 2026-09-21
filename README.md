@@ -86,7 +86,7 @@ installed harnesses, they disagree on the file, the format, and the key:
 | Codex | `~/.codex/config.toml` | TOML | `[mcp_servers.<name>]` |
 | opencode | `~/.config/opencode/opencode.json[c]` | JSON | `mcp` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON | `mcp.servers` |
-| Hermes | `~/.hermes/config.yaml` | YAML | `mcp_servers` |
+| Hermes | `HERMES_HOME`, else `%LOCALAPPDATA%\hermes` on Windows or `~/.hermes` | YAML | `mcp_servers` |
 
 `laya-mcp install` detects which are present and writes the right shape to each.
 Every writer merges rather than replaces, backs the file up first, and refuses to
@@ -226,10 +226,18 @@ from an accepted one:
 |---|---|---|
 | opencode | `opencode mcp list` | ✓ connected |
 | claude | `claude mcp list` | √ Connected |
-| codex | `codex mcp list --json` | reports the server, stdio transport |
+| codex | `codex mcp list --json` | `enabled`, `"type": "stdio"`, correct argv — `auth_status: unsupported` is not a fault, a local stdio server needs none |
 | OpenClaw | `openclaw mcp list --json` | reports the server, stdio transport |
-| Hermes | — | unverified: `hermes --version` fails with "isolated runtime is not ready" on this machine |
+| Hermes | `hermes mcp list` | ✓ enabled, and `hermes mcp test laya` connects and finds all 5 tools |
 | `pi` | — | no native MCP support; `install` detects it and says so |
+
+Every harness this installer supports now confirms through its own tooling. That
+is the only check that distinguishes a written file from an accepted one, and it
+earns its keep: Hermes reads its config from `%LOCALAPPDATA%\hermes` on Windows,
+not `~/.hermes`, so the installer had been reporting success while writing a file
+nothing read. Two faults hid it — Hermes was marked unverifiable, and on Windows
+none of these listers could even be launched, because npm ships each of them as a
+`.cmd` shim that `CreateProcess` refuses to execute.
 
 That table is the reason `stdio_latency.py` exists. Every harness above gives an
 MCP server 30 seconds to finish `initialize`, and answering the handshake only

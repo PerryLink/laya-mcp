@@ -60,7 +60,7 @@ Laya 会静默地截断东西，而这些省略恰恰是你在依据错误答案
 | Codex | `~/.codex/config.toml` | TOML | `[mcp_servers.<name>]` |
 | opencode | `~/.config/opencode/opencode.json[c]` | JSON | `mcp` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON | `mcp.servers` |
-| Hermes | `~/.hermes/config.yaml` | YAML | `mcp_servers` |
+| Hermes | `HERMES_HOME`，否则 Windows 上是 `%LOCALAPPDATA%\hermes`、其余是 `~/.hermes` | YAML | `mcp_servers` |
 
 `laya-mcp install` 检测哪些存在，并给每个写入正确的形状。所有写入器都是合并而非替换，先备份，并且拒绝对无法解析的文件动手——`~/.claude.json` 是一个装着历史与逐项目状态的大共享文件，为了装一个决策模型而覆盖它是灾难性的交易。
 
@@ -156,10 +156,12 @@ laya-mcp doctor                    # 装了什么，以及 GPU 真正能做什�
 |---|---|---|
 | opencode | `opencode mcp list` | ✓ connected |
 | claude | `claude mcp list` | √ Connected |
-| codex | `codex mcp list --json` | 报告出服务器与 stdio 传输 |
+| codex | `codex mcp list --json` | `enabled`、`"type": "stdio"`、参数正确——`auth_status: unsupported` 不是缺陷，本地 stdio server 不需要认证 |
 | OpenClaw | `openclaw mcp list --json` | 报告出服务器与 stdio 传输 |
-| Hermes | — | 未验证：本机 `hermes --version` 报「isolated runtime is not ready」 |
+| Hermes | `hermes mcp list` | ✓ enabled，且 `hermes mcp test laya` 能连上并发现全部 5 个工具 |
 | `pi` | — | 无原生 MCP 支持；`install` 会检测到并说明 |
+
+这个安装器支持的每一个 harness，现在都由它自己的工具确认过了。这是唯一能区分「文件被写了」与「文件被接受了」的检查，而它证明了自己的价值：Windows 上 Hermes 从 `%LOCALAPPDATA%\hermes` 读配置，不是 `~/.hermes`——安装器一直在报成功，同时写进一个没人读的文件。两个缺陷掩盖了它：Hermes 被标为不可验证，而在 Windows 上这些 lister 一个都启动不了，因为 npm 给它们的都是 `.cmd` 垫片，`CreateProcess` 拒绝执行。
 
 这张表正是 `stdio_latency.py` 存在的原因。上表中每个 harness 都只给 MCP server 30 秒完成 `initialize`，而在加载 checkpoint 之后才应答握手需要 19 秒（无争用）、275 秒（有另一个模型占着 GPU）——于是它们全都对一个解析得完全正确的配置报「Failed to connect」。现在加载跑在握手之后。
 

@@ -60,7 +60,7 @@ MCP सर्वर पंजीकृत करने का कोई पो�
 | Codex | `~/.codex/config.toml` | TOML | `[mcp_servers.<name>]` |
 | opencode | `~/.config/opencode/opencode.json[c]` | JSON | `mcp` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON | `mcp.servers` |
-| Hermes | `~/.hermes/config.yaml` | YAML | `mcp_servers` |
+| Hermes | `HERMES_HOME`, वरना Windows पर `%LOCALAPPDATA%\hermes` या `~/.hermes` | YAML | `mcp_servers` |
 
 `laya-mcp install` पता लगाता है कि कौन-से मौजूद हैं और हर एक में सही आकार लिखता है। सभी लेखक बदलने के बजाय मिलाते हैं, पहले बैकअप लेते हैं, और ऐसी फ़ाइल को छूने से इनकार करते हैं जिसे वे पढ़ नहीं सकते — `~/.claude.json` इतिहास और प्रति-प्रोजेक्ट स्थिति रखने वाली एक बड़ी साझा फ़ाइल है, और एक निर्णय मॉडल स्थापित करने के लिए उसे मिटा देना एक विनाशकारी सौदा होगा।
 
@@ -156,10 +156,19 @@ laya-mcp doctor                    # क्या स्थापित है, 
 |---|---|---|
 | opencode | `opencode mcp list` | ✓ connected |
 | claude | `claude mcp list` | √ Connected |
-| codex | `codex mcp list --json` | सर्वर और stdio ट्रांसपोर्ट रिपोर्ट करता है |
+| codex | `codex mcp list --json` | `enabled`, `"type": "stdio"`, सही argv — `auth_status: unsupported` कोई दोष नहीं: स्थानीय stdio सर्वर को प्रमाणीकरण नहीं चाहिए |
 | OpenClaw | `openclaw mcp list --json` | सर्वर और stdio ट्रांसपोर्ट रिपोर्ट करता है |
-| Hermes | — | असत्यापित: इस मशीन पर `hermes --version` «isolated runtime is not ready» के साथ विफल होता है |
+| Hermes | `hermes mcp list` | ✓ enabled, और `hermes mcp test laya` जुड़कर पाँचों उपकरण ढूँढता है |
 | `pi` | — | मूल MCP समर्थन नहीं; `install` इसे पहचानकर बता देता है |
+
+यह इंस्टॉलर जिन सभी harnesses का समर्थन करता है, वे अब अपने ही औज़ारों से पुष्टि
+करते हैं। यही एकमात्र जाँच है जो लिखी गई फ़ाइल को स्वीकृत फ़ाइल से अलग करती है, और
+इसने अपनी जगह कमाई है: Windows पर Hermes अपना कॉन्फ़िग `~/.hermes` से नहीं,
+`%LOCALAPPDATA%\hermes` से पढ़ता है, इसलिए इंस्टॉलर सफलता बताता रहा जबकि वह ऐसी
+फ़ाइल लिख रहा था जिसे कोई नहीं पढ़ता। दो दोष इसे छिपाए हुए थे: Hermes को
+असत्यापनीय चिह्नित किया गया था, और Windows पर इनमें से कोई lister चल ही नहीं सकता
+था, क्योंकि npm हर एक को `.cmd` शिम के रूप में देता है जिसे `CreateProcess` चलाने से
+इनकार करता है।
 
 यही तालिका `stdio_latency.py` के होने का कारण है। ऊपर का हर harness एक MCP सर्वर को `initialize` पूरा करने के लिए 30 सेकंड देता है, और checkpoint लोड करने के बाद handshake का उत्तर देना बिना प्रतिस्पर्धा 19 सेकंड और GPU पर दूसरा मॉडल होने पर 275 सेकंड लेता था — इसलिए उन सबने ऐसी कॉन्फ़िग पर «Failed to connect» रिपोर्ट किया जिसे उन्होंने बिल्कुल ठीक पढ़ा था। अब लोड handshake के पीछे चलता है।
 

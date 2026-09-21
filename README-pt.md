@@ -60,7 +60,7 @@ Não há forma portátil de registar um servidor MCP. Medidos contra harnesses r
 | Codex | `~/.codex/config.toml` | TOML | `[mcp_servers.<name>]` |
 | opencode | `~/.config/opencode/opencode.json[c]` | JSON | `mcp` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON | `mcp.servers` |
-| Hermes | `~/.hermes/config.yaml` | YAML | `mcp_servers` |
+| Hermes | `HERMES_HOME`, senão `%LOCALAPPDATA%\hermes` no Windows ou `~/.hermes` | YAML | `mcp_servers` |
 
 O `laya-mcp install` deteta quais estão presentes e escreve a forma correta em cada um. Todos os escritores fundem em vez de substituir, fazem cópia de segurança primeiro, e recusam tocar num ficheiro que não conseguem analisar — o `~/.claude.json` é um ficheiro partilhado grande que guarda histórico e estado por projeto, e sobrescrevê-lo para instalar um modelo de decisão seria uma troca catastrófica.
 
@@ -156,10 +156,19 @@ A aceitação foi depois verificada deixando os harnesses analisar **e ligar-se 
 |---|---|---|
 | opencode | `opencode mcp list` | ✓ connected |
 | claude | `claude mcp list` | √ Connected |
-| codex | `codex mcp list --json` | reporta o servidor e o transporte stdio |
+| codex | `codex mcp list --json` | `enabled`, `"type": "stdio"`, argv correto — `auth_status: unsupported` não é uma falha: um servidor stdio local não precisa de autenticação |
 | OpenClaw | `openclaw mcp list --json` | reporta o servidor e o transporte stdio |
-| Hermes | — | não verificado: `hermes --version` falha com «isolated runtime is not ready» nesta máquina |
+| Hermes | `hermes mcp list` | ✓ enabled, e `hermes mcp test laya` liga e encontra as 5 ferramentas |
 | `pi` | — | sem suporte MCP nativo; o `install` deteta-o e di-lo |
+
+Todos os harnesses que este instalador suporta confirmam agora através das suas
+próprias ferramentas. Essa é a única verificação que distingue um ficheiro escrito
+de um ficheiro aceite, e ganhou o seu lugar: no Windows o Hermes lê a sua
+configuração de `%LOCALAPPDATA%\hermes`, não de `~/.hermes`, por isso o instalador
+reportava sucesso enquanto escrevia um ficheiro que ninguém lia. Dois defeitos
+escondiam-no: o Hermes estava marcado como não verificável, e no Windows nenhum
+destes listers podia sequer ser lançado, porque o npm entrega cada um como um shim
+`.cmd` que o `CreateProcess` se recusa a executar.
 
 Essa tabela é a razão de existir o `stdio_latency.py`. Todos os harnesses acima dão a um servidor MCP 30 segundos para terminar o `initialize`, e responder ao handshake só depois de carregar um checkpoint levava 19 s sem contenção e 275 s enquanto outro modelo ocupava a GPU — por isso todos reportavam «Failed to connect» sobre uma configuração que tinham analisado perfeitamente. Agora o carregamento corre por trás do handshake.
 

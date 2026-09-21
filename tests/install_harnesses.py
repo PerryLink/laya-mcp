@@ -6,10 +6,11 @@ large shared file holding history and per-project state, and a test that clobber
 it to save a typing exercise would be a worse bug than any it could catch.
 
 What this proves, per harness: the file is created, it parses as its own format,
-and the entry lands under the key that harness actually reads. It does NOT prove a
-harness accepts the file - only that harness's own lister can prove that, and two
-of the five are not installable here (pi has no MCP support at all, and this
-machine's hermes runtime is incomplete).
+and the entry lands under the key that harness actually reads - and, for the path
+rules that differ by platform, that the path is the one the harness itself
+resolves. It does NOT prove a harness accepts the file; only that harness's own
+lister can prove that, and `pi` has no MCP support at all so there is nothing to
+accept.
 
 Run:  python tests/install_harnesses.py
 """
@@ -188,6 +189,37 @@ def main() -> int:
     detected = detect_harnesses()
     check("detection returns every harness with a status",
           len(detected) == len(HARNESSES), f"{len(detected)} vs {len(HARNESSES)}")
+
+    print("\nhermes resolves its config the way hermes does")
+    # Hermes does not use `~/.hermes` on Windows. Writing there produces a file it
+    # never reads, while the installer reports success - which is what happened,
+    # and what `hermes mcp list` was added to catch.
+    from laya_mcp.harnesses import _hermes_path
+
+    saved = {key: os.environ.get(key) for key in ("HERMES_HOME", "LOCALAPPDATA")}
+    try:
+        probe = Path(tempfile.gettempdir()) / "hermes-home-probe"
+        os.environ["HERMES_HOME"] = str(probe)
+        check("HERMES_HOME wins outright",
+              _hermes_path() == probe / "config.yaml", str(_hermes_path()))
+
+        os.environ.pop("HERMES_HOME", None)
+        if sys.platform == "win32":
+            os.environ["LOCALAPPDATA"] = r"C:\probe\LocalAppData"
+            expected = Path(r"C:\probe\LocalAppData") / "hermes" / "config.yaml"
+            check("Windows reads LOCALAPPDATA", _hermes_path() == expected, str(_hermes_path()))
+            check("Windows does not read ~/.hermes",
+                  _hermes_path() != Path(os.path.expanduser("~")) / ".hermes" / "config.yaml",
+                  str(_hermes_path()))
+        else:
+            expected = Path(os.path.expanduser("~")) / ".hermes" / "config.yaml"
+            check("POSIX falls back to ~/.hermes", _hermes_path() == expected, str(_hermes_path()))
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
     print()
     if FAILURES:
