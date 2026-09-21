@@ -14,7 +14,7 @@ laya-mcp install          # registers it with whichever agent harness you have
 ```
 
 > **Status: 0.1.0, work in progress.** The core is implemented and its pure logic
-> is covered by 64 checks, but it has not yet been exercised end-to-end against a
+> is covered by 66 checks, but it has not yet been exercised end-to-end against a
 > live harness in CI. Interfaces may move before 1.0.
 
 ---
