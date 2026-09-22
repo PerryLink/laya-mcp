@@ -15,7 +15,7 @@ laya-mcp serve            # loads the model once, keeps it warm on 127.0.0.1:878
 laya-mcp install          # registers it with whichever agent harness you have
 ```
 
-> **Status: 0.2.1, work in progress.** The core is implemented and its pure logic
+> **Status: 0.2.2, work in progress.** The core is implemented and its pure logic
 > is covered by 94 checks, but it has not yet been exercised end-to-end against a
 > live harness in CI. Interfaces may move before 1.0.
 

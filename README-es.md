@@ -12,7 +12,7 @@ laya-mcp serve            # carga el modelo una vez, lo mantiene caliente en 127
 laya-mcp install          # lo registra en el harness de agente que tengas
 ```
 
-> **Estado: 0.2.1, en desarrollo.** El núcleo está implementado y su lógica pura está cubierta por 94 comprobaciones, pero todavía no se ha ejercitado de extremo a extremo contra un harness real en CI. Las interfaces pueden cambiar antes de 1.0.
+> **Estado: 0.2.2, en desarrollo.** El núcleo está implementado y su lógica pura está cubierta por 94 comprobaciones, pero todavía no se ha ejercitado de extremo a extremo contra un harness real en CI. Las interfaces pueden cambiar antes de 1.0.
 
 ---
 

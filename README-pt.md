@@ -12,7 +12,7 @@ laya-mcp serve            # carrega o modelo uma vez, mantém-no quente em 127.0
 laya-mcp install          # regista-o no harness de agente que tiveres
 ```
 
-> **Estado: 0.2.1, em desenvolvimento.** O núcleo está implementado e a sua lógica pura está coberta por 94 verificações, mas ainda não foi exercitado de ponta a ponta contra um harness real em CI. As interfaces podem mudar antes de 1.0.
+> **Estado: 0.2.2, em desenvolvimento.** O núcleo está implementado e a sua lógica pura está coberta por 94 verificações, mas ainda não foi exercitado de ponta a ponta contra um harness real em CI. As interfaces podem mudar antes de 1.0.
 
 ---
 
