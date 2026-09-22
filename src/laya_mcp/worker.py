@@ -106,6 +106,59 @@ def _band(probability: float) -> str:
     return "uncertain"
 
 
+#: Whether the left-truncation patch has been applied in this process. The rebind
+#: is process-wide, so applying it twice would wrap the wrapper.
+_LEFT_TRUNCATION_PATCHED = False
+
+
+def _enable_left_truncation() -> None:
+    """Make Laya keep the tail of an oversized state instead of its head.
+
+    ``build_sequence`` already takes ``truncate_left`` and already implements it
+    (``st[-room:] if truncate_left else st[:room]``). Nothing needs writing. The
+    problem is that it cannot be asked for: ``Agent.system_one`` calls
+
+        build_sequence(self.tok, state, q, max_len, head_max_len)
+
+    and stops, so the flag never leaves its default. Upstream PR #112 notices the
+    same thing from the other side, describing the bug it fixes as affecting "only
+    direct callers" - because through ``Agent`` there are no direct callers.
+
+    So this rebinds the name ``laya.agent`` imported. Three properties matter and
+    all three are deliberate:
+
+    * the *original* function still does all the work, so a fix landing upstream is
+      picked up unchanged and this keeps working whether or not #112 merges;
+    * only the one argument a caller cannot supply is injected - an explicit
+      positional ``truncate_left`` still wins, so this cannot silently override a
+      caller that did find a way to pass it;
+    * it is process-wide and applied once, which is correct here because a sidecar
+      hosts exactly one configuration, and is why this is a sidecar flag rather
+      than something a request may toggle.
+    """
+    global _LEFT_TRUNCATION_PATCHED
+    if _LEFT_TRUNCATION_PATCHED:
+        return
+
+    from laya import agent as laya_agent
+
+    original = laya_agent.build_sequence
+
+    def build_sequence(*args: Any, **kwargs: Any) -> Any:
+        # Position 7 is `truncate_left` in
+        # `build_sequence(tok, state, q, max_len, head_max_len, option_order, truncate_left)`.
+        if len(args) < 7:
+            kwargs["truncate_left"] = True
+        return original(*args, **kwargs)
+
+    laya_agent.build_sequence = build_sequence
+    _LEFT_TRUNCATION_PATCHED = True
+    log.info(
+        "truncate_left is on: an oversized state keeps its tail. `build_sequence` is "
+        "rebound in laya.agent because `Agent.system_one` does not forward the flag."
+    )
+
+
 @dataclass
 class WorkerConfig:
     """How to host the model.
@@ -138,6 +191,23 @@ class WorkerConfig:
     #: It is a workaround for a defect in the checkpoint, not a preference, so it
     #: is a knob: turn it off to see the raw primitive, or once upstream fixes it.
     noul_as_choice: bool = True
+    #: Keep the state's *tail* when it does not fit, instead of its head.
+    #:
+    #: Laya truncates the state from the front (``st[:room]`` in ``build_sequence``),
+    #: so the default loses the end of a long document - which for a contract, a log
+    #: thread, or an email chain with the correction appended at the bottom is often
+    #: exactly where the answer is. Measured on one 16 958-character state, a decoy
+    #: code at the front and a correction at the back, same question both times:
+    #: keeping the front scores the noul at **0.0706** ("no") because the model reads
+    #: the decoy, and keeping the tail scores it **0.8341** ("yes") because it reads
+    #: the correction. Which end survives is not a detail of the implementation; it
+    #: decides the answer.
+    #:
+    #: Enabling it needs a small, deliberate patch, because the parameter cannot be
+    #: reached from the public API at all: ``build_sequence`` accepts
+    #: ``truncate_left``, and ``Agent.system_one`` calls it without forwarding it.
+    #: See :func:`_enable_left_truncation`.
+    truncate_left: bool = False
 
 
 class LayaWorker:
@@ -184,6 +254,9 @@ class LayaWorker:
 
     def _load(self) -> None:
         import laya  # imported here so `doctor` never pays for torch
+
+        if self.config.truncate_left:
+            _enable_left_truncation()
 
         wanted = [self.config.model, *self.config.also]
         normalised: list[str] = []
@@ -349,6 +422,10 @@ class LayaWorker:
             "calls": self._calls,
             "failures": self._failures,
             "last_latency_ms": round(self._last_latency_ms, 2),
+            # Which end of an oversized state survives. A client that reads
+            # `truncated` needs this to interpret it, and it is a property of the
+            # server rather than of any one answer.
+            "truncate_left": self.config.truncate_left,
         }
         if self._started_at is not None:
             payload["uptime_s"] = round(time.time() - self._started_at, 1)
@@ -403,7 +480,12 @@ class LayaWorker:
         checkpoint = self._resolve_checkpoint(request)
         capability = self._capability_for(checkpoint)
 
-        plan: BudgetPlan = plan_questions(capability, request.state, request.questions)
+        plan: BudgetPlan = plan_questions(
+            capability,
+            request.state,
+            request.questions,
+            truncate_left=self.config.truncate_left,
+        )
         plan.warnings = (*plan.warnings, *self._request_warnings(request, capability))
         if (request.strict or self.config.strict) and not plan.fits:
             raise StateTruncatedError(
@@ -444,7 +526,12 @@ class LayaWorker:
         checkpoint = self._resolve_checkpoint(request)
         capability = self._capability_for(checkpoint)
 
-        plan: BudgetPlan = plan_questions(capability, request.state, request.questions)
+        plan: BudgetPlan = plan_questions(
+            capability,
+            request.state,
+            request.questions,
+            truncate_left=self.config.truncate_left,
+        )
         plan.warnings = (*plan.warnings, *self._request_warnings(request, capability))
         return plan.to_dict()
 

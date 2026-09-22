@@ -12,6 +12,12 @@ that survived, at full confidence, with nothing in the response to say a cut
 happened. Upstream's own issue #49 notes the related cost: the state is
 re-encoded for every question, so the cut is also paid repeatedly.
 
+That direction is a default, not a law: ``truncate_left`` reverses it, and a
+sidecar started with ``--truncate-left`` keeps the tail instead. Every sentence
+this module generates about the cut therefore names the end that was actually
+kept, and the report carries it as a field (``kept``) as well as in prose, so a
+caller never has to infer the direction from a phrase.
+
 *The options.* Each option body is cut to 48 tokens; if the total still does not
 leave 16 tokens for the instructions, every option is re-cut to
 ``max(4, (head_max_len - 16) // option_count)``. A 77-label question therefore
@@ -237,6 +243,10 @@ class BudgetPlan:
     """False when the state figures are a character estimate rather than a token
     count. The option figures are exact either way."""
 
+    truncate_left: bool = False
+    """Which end of an oversized state survives: ``False`` keeps the front (Laya's
+    default), ``True`` keeps the tail. The server decides this, not the request."""
+
     questions: tuple[QuestionPlan, ...] = field(default_factory=tuple)
 
     state_chars: int = 0
@@ -274,13 +284,19 @@ class BudgetPlan:
             return None
         report: dict[str, Any] = {}
         if state_cut:
+            kept, dropped, survives = (
+                ("TAIL", "front", "suffix") if self.truncate_left else ("FRONT", "tail", "prefix")
+            )
             report["state"] = {
                 "estimated": True,
                 "state_chars": self.state_chars,
                 "state_tokens_estimated": self.state_tokens_estimated,
+                # Machine-readable, because the prose below is the only other place
+                # the direction appears and a caller should not have to parse it.
+                "kept": kept.lower(),
                 "note": (
-                    "the state exceeded its token budget and Laya keeps the FRONT of it, "
-                    "discarding the tail; the answer is about the surviving prefix only"
+                    f"the state exceeded its token budget and Laya keeps the {kept} of it, "
+                    f"discarding the {dropped}; the answer is about the surviving {survives} only"
                 ),
             }
         if squeezed:
@@ -308,6 +324,7 @@ def plan_questions(
     questions: Mapping[str, Question],
     *,
     tokenizer: Any = None,
+    truncate_left: bool = False,
 ) -> BudgetPlan:
     """Plan a batch against a checkpoint's budget, without running it.
 
@@ -406,7 +423,8 @@ def plan_questions(
     any_truncation = any(p.would_truncate_state for p in plans)
     if any_truncation and not exact:
         warnings.append(
-            "the state is close to or over its budget, so its tail is likely to be discarded; "
+            "the state is close to or over its budget, so its "
+            f"{'front' if truncate_left else 'tail'} is likely to be discarded; "
             "raise max_len at startup, shorten the state, or set strict=true to refuse instead"
         )
 
@@ -417,6 +435,7 @@ def plan_questions(
         max_len=capability.max_len,
         head_max_len=capability.head_max_len,
         exact=exact,
+        truncate_left=truncate_left,
         questions=tuple(plans),
         state_chars=chars,
         state_tokens_estimated=state_tokens,

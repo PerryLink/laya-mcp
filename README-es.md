@@ -12,7 +12,7 @@ laya-mcp serve            # carga el modelo una vez, lo mantiene caliente en 127
 laya-mcp install          # lo registra en el harness de agente que tengas
 ```
 
-> **Estado: 0.2.1, en desarrollo.** El núcleo está implementado y su lógica pura está cubierta por 85 comprobaciones, pero todavía no se ha ejercitado de extremo a extremo contra un harness real en CI. Las interfaces pueden cambiar antes de 1.0.
+> **Estado: 0.2.1, en desarrollo.** El núcleo está implementado y su lógica pura está cubierta por 94 comprobaciones, pero todavía no se ha ejercitado de extremo a extremo contra un harness real en CI. Las interfaces pueden cambiar antes de 1.0.
 
 ---
 
@@ -114,6 +114,7 @@ curl -s localhost:8787/ask -H 'content-type: application/json' -d '{
 |---|---|
 | `--head-max-len` | Elevada al arrancar, es la solución para `choice` de alta cardinalidad. Las opciones la comparten, así que más espacio por etiqueta es la única forma de mantenerlas distinguibles. Se lee de nuevo en cada llamada, así que fijarla una vez basta. |
 | `--max-len` | El presupuesto total. Elevarla es la solución para un estado truncado. |
+| `--truncate-left` | Conserva el **final** de un estado sobredimensionado en lugar de su principio. Desactivada por defecto porque cambia qué parte de un documento largo lee el modelo — y decide respuestas: un mismo estado de 16 958 caracteres, con un señuelo delante y la corrección detrás, dio un `noul` de **0.0706** conservando el principio y **0.8341** conservando el final. Úsala cuando la respuesta esté al final (un hilo, un registro, las cláusulas finales de un contrato), y lee `truncated.state.kept` para saber qué extremo sobrevivió. |
 | `--concurrency` | Súbela solo si sabes que Laya no comparte estado de dispositivo. El 1 por defecto es corrección, no cautela. |
 | `--sidecar` | Apunta `laya-mcp mcp` a un `serve` en ejecución. Muy recomendado: un harness lanza un servidor stdio por sesión, y alojar el modelo en cada uno paga el coste de carga por sesión. |
 
@@ -136,15 +137,15 @@ La calibración hace que una probabilidad sea *honesta*; no puede hacer que un m
 ## Verificar
 
 ```bash
-python tests/smoke_pure.py         # 85 comprobaciones: validación, planificación, calibración, errores
+python tests/smoke_pure.py         # 94 comprobaciones: validación, planificación, calibración, errores
 python tests/install_harnesses.py  # 38: cada dialecto de harness, en un directorio temporal
-python tests/mcp_protocol.py       # 25 con sidecar (20 sin él): un handshake MCP real y llamadas de herramienta reales
+python tests/mcp_protocol.py       # 30 con sidecar (25 sin él): un handshake MCP real y llamadas de herramienta reales
 python tests/stdio_latency.py      # handshake <5 s, tools/list instantáneo, tools/call responde
 python tests/language_probe.py     # qué puede hacer realmente cada checkpoint, por idioma
 laya-mcp doctor                    # qué está instalado, y qué puede hacer de verdad la GPU
 ```
 
-148 comprobaciones en las tres suites, y cada una cubre una capa que las otras no alcanzan. `stdio_latency.py` y `language_probe.py` necesitan un modelo y son mediciones, no aserciones, así que se ejecutan a mano y sus números se citan arriba.
+162 comprobaciones en las tres suites, y cada una cubre una capa que las otras no alcanzan. `stdio_latency.py` y `language_probe.py` necesitan un modelo y son mediciones, no aserciones, así que se ejecutan a mano y sus números se citan arriba.
 
 `smoke_pure.py` no necesita torch, modelo, red ni configuración de harness. `install_harnesses.py` redirige cada harness a un directorio temporal, porque `~/.claude.json` es un archivo compartido grande que guarda historial y estado por proyecto, y un test que lo sobrescribiera sería un bug peor que cualquiera que pudiera detectar.
 

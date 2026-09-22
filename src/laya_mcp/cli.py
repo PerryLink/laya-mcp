@@ -107,6 +107,18 @@ def build_parser() -> argparse.ArgumentParser:
             "thread-safe: its Agent mutates self.device on an OOM, so the default serialises."
         ),
     )
+    serve.add_argument(
+        "--truncate-left",
+        action="store_true",
+        help=(
+            "keep the TAIL of an oversized state instead of its head. Laya's default keeps "
+            "the front and silently discards the end, which for a contract, a log thread or "
+            "an email chain with the correction appended at the bottom is often where the "
+            "answer is. Measured: one 16958-character state scored a noul 0.0706 with the "
+            "front kept and 0.8341 with the tail kept. Off by default because it changes "
+            "which part of a long document the model reads."
+        ),
+    )
     serve.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"])
 
     # -- mcp -----------------------------------------------------------------
@@ -153,6 +165,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="override the per-question option+instruction budget (the high-cardinality fix)",
     )
     mcp.add_argument("--calibration", default=None, help="path to a calibration store JSON")
+    mcp.add_argument(
+        "--truncate-left",
+        action="store_true",
+        help=(
+            "keep the TAIL of an oversized state instead of its head, when this process hosts "
+            "the model. Ignored with --sidecar, where the other process decides."
+        ),
+    )
 
     # -- doctor --------------------------------------------------------------
     doctor = sub.add_parser(
@@ -204,6 +224,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         calibration_path=args.calibration,
         concurrency=args.concurrency,
         log_level=args.log_level,
+        truncate_left=args.truncate_left,
     )
 
 
@@ -225,6 +246,7 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
         max_len=args.max_len,
         head_max_len=args.head_max_len,
         calibration_path=args.calibration,
+        truncate_left=args.truncate_left,
     )
 
     try:

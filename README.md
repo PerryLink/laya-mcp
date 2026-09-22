@@ -16,7 +16,7 @@ laya-mcp install          # registers it with whichever agent harness you have
 ```
 
 > **Status: 0.2.1, work in progress.** The core is implemented and its pure logic
-> is covered by 85 checks, but it has not yet been exercised end-to-end against a
+> is covered by 94 checks, but it has not yet been exercised end-to-end against a
 > live harness in CI. Interfaces may move before 1.0.
 
 ---
@@ -161,6 +161,7 @@ inference.
 |---|---|
 | `--head-max-len` | Raised at startup, this is the fix for high-cardinality `choice`. Options share it, so more room per label is the only way to keep them distinguishable. Read fresh on every call, so setting it once is enough. |
 | `--max-len` | The total budget. Raising it is the fix for a truncated state. |
+| `--truncate-left` | Keep the **tail** of an oversized state instead of its head. Off by default because it changes which part of a long document the model reads — and it decides answers: one 16 958-character state with a decoy at the front and the correction at the back scored a `noul` **0.0706** with the front kept and **0.8341** with the tail kept. Use it when the end is where the answer is (a thread, a log, a contract's closing terms), and read `truncated.state.kept` to see which end survived. |
 | `--concurrency` | Raise only if you know Laya is not sharing device state. The default of 1 is correctness, not caution. |
 | `--sidecar` | Point `laya-mcp mcp` at a running `serve`. Strongly recommended: a harness spawns one stdio server per session, and hosting the model in each one pays the load cost per session. |
 
@@ -193,15 +194,15 @@ accuracy is not there for your task, fit on your own domain or do not deploy it.
 ## Verify
 
 ```bash
-python tests/smoke_pure.py         # 85 checks: validation, planning, calibration, errors
+python tests/smoke_pure.py         # 94 checks: validation, planning, calibration, errors
 python tests/install_harnesses.py  # 38 checks: every harness dialect, in a temp dir
-python tests/mcp_protocol.py       # 25 checks live (20 offline): a real MCP handshake and real tool calls
+python tests/mcp_protocol.py       # 30 checks live (25 offline): a real MCP handshake and real tool calls
 python tests/stdio_latency.py      # handshake <5 s, tools/list instant, tools/call returns
 python tests/language_probe.py     # what each checkpoint can actually do, per language
 laya-mcp doctor                    # what is installed, and what the GPU can really do
 ```
 
-148 checks in the three suites, and each covers a layer the others cannot reach.
+162 checks in the three suites, and each covers a layer the others cannot reach.
 `stdio_latency.py` and `language_probe.py` need a model and are measurements
 rather than assertions, so they are run by hand and their numbers are quoted
 above.

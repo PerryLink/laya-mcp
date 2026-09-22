@@ -281,6 +281,7 @@ def serve(
     concurrency: int = 1,
     log_level: str = "info",
     preload: bool = True,
+    truncate_left: bool = False,
 ) -> int:
     """Run the sidecar until interrupted. Returns a process exit code."""
     _configure_logging(log_level)
@@ -307,6 +308,7 @@ def serve(
             calibration_path=calibration_path,
             concurrency=concurrency,
             preload=preload,
+            truncate_left=truncate_left,
         )
     )
 

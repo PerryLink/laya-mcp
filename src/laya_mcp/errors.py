@@ -230,8 +230,10 @@ class StateTruncatedError(LayaMcpError):
 
     Laya truncates the state from the *end* (``truncate_left=False`` in
     ``build_sequence``), so the tail of a long document is what disappears, and
-    nothing in the result marks it. This is raised only in strict mode; the
-    default is to answer and report ``state_truncated`` on the response.
+    nothing in the result marks it. A sidecar started with ``--truncate-left``
+    reverses that and keeps the tail, which is why the details carried here name the
+    end that was kept rather than assuming one. This is raised only in strict mode;
+    the default is to answer and report ``state_truncated`` on the response.
     """
     code = ErrorCode.STATE_TRUNCATED
 

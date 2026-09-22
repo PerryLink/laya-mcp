@@ -87,6 +87,25 @@ async def main() -> int:
         print("the MCP SDK is not installed; run: pip install 'laya-mcp[mcp]'")
         return 2
 
+    # The direction is a server setting now, so the budget sentence is built rather
+    # than fixed. All three variants are checked directly, because this suite only
+    # ever spawns the `--sidecar` one and the other two would go unexercised.
+    from laya_mcp.mcp_server import _budget_note
+
+    note_front = _budget_note(False)
+    note_tail = _budget_note(True)
+    note_sidecar = _budget_note(None)
+    check("a front-keeping server says it discards the tail",
+          "discards the tail" in note_front and "FRONT" in note_front, note_front[:130])
+    check("a tail-keeping server says it discards the front",
+          "discards the front" in note_tail and "TAIL" in note_tail, note_tail[:130])
+    check("a sidecar-backed server points at the field instead of guessing",
+          "truncated.state.kept" in note_sidecar and "discards" not in note_sidecar,
+          note_sidecar[:170])
+    check("every variant still carries the budget warning",
+          all("token budget" in n and "shortened" in n
+              for n in (note_front, note_tail, note_sidecar)))
+
     # Spawned exactly as a harness spawns it: the module form, not a console
     # script. On Windows a console script is a .cmd shim and the MCP stdio
     # transport spawns with shell:false, which cannot execute one.
@@ -126,9 +145,19 @@ async def main() -> int:
                   (ask.description or "")[:80])
             check("laya_ask warns that confidence is not accuracy",
                   "NOT the probability" in (ask.description or ""))
-            check("laya_ask warns about end-truncation",
-                  "truncated from the END" in (ask.description or ""),
-                  "the silent-truncation warning is the point of this tool")
+            description = ask.description or ""
+            check("laya_ask warns that an oversized state is truncated",
+                  "truncated" in description and "token budget" in description,
+                  description[:120])
+            # Which end is at risk depends on how the server was started, so the
+            # description either names it or points at the field that does. Asserting
+            # the substance rather than one wording: the literal "truncated from the
+            # END" stopped being true the moment `--truncate-left` existed, and a
+            # description that kept saying it would be worse than saying nothing.
+            check("laya_ask names the end that survives, or where to read it",
+                  "discards the tail" in description or "discards the front" in description
+                  or "truncated.state.kept" in description,
+                  description[:220])
             check("laya_ask warns that options get shortened",
                   "shortened" in (ask.description or ""))
             check("parameters declare state and questions",

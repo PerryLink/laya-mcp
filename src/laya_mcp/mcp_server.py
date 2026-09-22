@@ -59,19 +59,41 @@ _CONFIDENCE_NOTE = (
 )
 
 #: The token-budget warning, which every tool that actually runs the model must
-#: carry. Laya cuts an oversized state from the END and shortens option text until
-#: labels stop being distinguishable, and it reports neither in its own payload.
-#: A caller that does not know this will read a confident answer about a fragment
-#: as an answer about the whole document. The `laya_ask` description below and the
-#: sibling DSH plugin's must agree on this; they did not, and the DSH one was the
-#: only place it was written down.
-_BUDGET_NOTE = (
-    "The checkpoint has a fixed token budget. An oversized state is truncated from the END "
-    "without appearing in the answer, and a question with many options has its option text "
-    "shortened until labels are no longer distinguishable. Read `truncated`, `budget_summary` "
-    "and `warnings` on the result before trusting an answer about a large document or a long "
-    "option list, or call `laya_plan` first to see what would be cut."
+#: carry. Laya cuts an oversized state and shortens option text until labels stop
+#: being distinguishable, and it reports neither in its own payload. A caller that
+#: does not know this will read a confident answer about a fragment as an answer
+#: about the whole document. The `laya_ask` description below and the sibling DSH
+#: plugin's must agree on this; they did not, and the DSH one was the only place it
+#: was written down.
+#:
+#: Which *end* is cut depends on how the server was started (``--truncate-left``),
+#: so the sentence is built rather than fixed: a tool description that promised the
+#: wrong end would be worse than one that said nothing, because the caller would
+#: trust it.
+_BUDGET_NOTE_TEMPLATE = (
+    "The checkpoint has a fixed token budget. An oversized state is truncated without "
+    "appearing in the answer - {direction} - and a question with many options has its option "
+    "text shortened until labels are no longer distinguishable. Read `truncated`, "
+    "`budget_summary` and `warnings` on the result before trusting an answer about a large "
+    "document or a long option list, or call `laya_plan` first to see what would be cut."
 )
+
+
+def _budget_note(truncate_left: Optional[bool]) -> str:
+    """The budget warning, naming the end that is actually discarded.
+
+    ``None`` means this process cannot know: with ``--sidecar`` the model runs
+    elsewhere, and asking it would mean a network round-trip while the server is
+    being built - which is precisely the handshake latency this server was fixed to
+    stop paying. So it points at the field that does know rather than guessing.
+    """
+    if truncate_left is None:
+        direction = "the sidecar decides which end survives, and `truncated.state.kept` reports it"
+    elif truncate_left:
+        direction = "this server keeps the TAIL of the state and discards the front"
+    else:
+        direction = "this server keeps the FRONT of the state and discards the tail"
+    return _BUDGET_NOTE_TEMPLATE.format(direction=direction)
 
 
 class Backend:
@@ -88,6 +110,15 @@ class Backend:
         if self._worker is None:
             self._worker = LayaWorker(self._config)
         return self._worker
+
+    @property
+    def truncate_left(self) -> bool:
+        """Whether this process's own model would keep the tail of an oversized state.
+
+        Only meaningful without a sidecar: with one, the truncation happens in the
+        other process and this setting is never consulted.
+        """
+        return self._config.truncate_left
 
     def start_warm(self) -> None:
         """Begin loading the model on a background thread.
@@ -308,6 +339,10 @@ def build_server(backend: Backend, tools: Optional[Sequence[str]] = None):
     def wanted(tool: str) -> bool:
         return tools is None or tool in tools
 
+    # Computed once, and only from what this process can actually know: with a
+    # sidecar the direction belongs to the other process.
+    budget_note = _budget_note(None if backend.sidecar else backend.truncate_left)
+
     if wanted("laya_ask"):
 
         @server.tool(
@@ -317,7 +352,7 @@ def build_server(backend: Backend, tools: Optional[Sequence[str]] = None):
                 "email, a ticket, a document) and get calibrated probabilities back. Each "
                 "question is `noul` (yes/no), `choice` (pick one of a fixed set) or `score` "
                 "(place on an ordered scale). Use this instead of reading the state yourself "
-                "when the answer is a decision rather than a summary.\n\n" + _BUDGET_NOTE + " " +
+                "when the answer is a decision rather than a summary.\n\n" + budget_note + " " +
                 _NOT_FOR_PROSE + " " + _CONFIDENCE_NOTE
             ),
         )
@@ -345,7 +380,7 @@ def build_server(backend: Backend, tools: Optional[Sequence[str]] = None):
                 "probability, not a decision: 0.51 is a coin toss, and the result includes a "
                 "`band` of no/uncertain/yes. Supply `boundary` whenever the line between yes "
                 "and no is not obvious - a probability whose boundary is unstated cannot be "
-                "read. " + _BUDGET_NOTE + " " + _NOT_FOR_PROSE
+                "read. " + budget_note + " " + _NOT_FOR_PROSE
             ),
         )
         def laya_noul(
@@ -374,7 +409,7 @@ def build_server(backend: Backend, tools: Optional[Sequence[str]] = None):
                 "the full distribution over the options. Options need descriptions: two bare "
                 "labels are often indistinguishable to the model, and the description is what "
                 "separates them. Accuracy falls off sharply above roughly 20 options. " +
-                _BUDGET_NOTE + " " + _NOT_FOR_PROSE
+                budget_note + " " + _NOT_FOR_PROSE
             ),
         )
         def laya_choice(state: Any, instructions: str, options: dict[str, Any]) -> str:
@@ -397,7 +432,7 @@ def build_server(backend: Backend, tools: Optional[Sequence[str]] = None):
                 "the distribution. Levels must be passed in ascending order, because position "
                 "IS the score. Note that this is Laya's weakest primitive in independent "
                 "measurement, so prefer `laya_choice` when the levels can be treated as "
-                "unordered. " + _BUDGET_NOTE + " " + _NOT_FOR_PROSE
+                "unordered. " + budget_note + " " + _NOT_FOR_PROSE
             ),
         )
         def laya_score(state: Any, instructions: str, levels: list[str]) -> str:

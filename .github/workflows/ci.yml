@@ -37,7 +37,7 @@ jobs:
       - run: python -m pip install --no-deps -e .
       - run: python -m pip install "mcp>=1.28,<2" pyyaml
 
-      # 117 checks of pure logic: validation, planning, calibration, errors, and
+      # 132 checks of pure logic: validation, planning, calibration, errors, and
       # every harness config dialect.
       - run: python tests/smoke_pure.py
       - run: python tests/install_harnesses.py

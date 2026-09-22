@@ -12,7 +12,7 @@ laya-mcp serve            # 加载一次模型，常驻在 127.0.0.1:8787
 laya-mcp install          # 注册到本机已有的任意 agent harness
 ```
 
-> **状态：0.2.1，开发中。** 核心已实现，纯逻辑部分由 85 项检查覆盖；但尚未在 CI 中经过真实 harness 的端到端验证。1.0 之前接口可能变动。
+> **状态：0.2.1，开发中。** 核心已实现，纯逻辑部分由 94 项检查覆盖；但尚未在 CI 中经过真实 harness 的端到端验证。1.0 之前接口可能变动。
 
 ---
 
@@ -114,6 +114,7 @@ curl -s localhost:8787/ask -H 'content-type: application/json' -d '{
 |---|---|
 | `--head-max-len` | 在启动时调高，这是高基数 `choice` 的解法。选项共享它，所以给每个标签更多空间是保持它们可区分的唯一办法。每次调用都重新读取，所以设一次就够。 |
 | `--max-len` | 总预算。调高它是 state 被截断的解法。 |
+| `--truncate-left` | 超长 state 保留**末尾**而不是开头。默认关闭，因为它改变了模型读长文档的哪一部分——而它决定答案：同一个 16958 字符的 state（开头是诱饵码、末尾是更正），保留开头时 `noul` 为 **0.0706**，保留末尾时为 **0.8341**。当答案在末尾时（邮件往来、日志、合同的收尾条款）就用它，读 `truncated.state.kept` 可知活下来的是哪一端。 |
 | `--concurrency` | 只有在你确知 Laya 不共享设备状态时才调高。默认 1 是正确性，不是谨慎。 |
 | `--sidecar` | 让 `laya-mcp mcp` 指向一个正在运行的 `serve`。强烈推荐：harness 每个会话生成一个 stdio server，在每个里面托管模型要为每个会话付一次加载成本。 |
 
@@ -136,15 +137,15 @@ curl -s localhost:8787/ask -H 'content-type: application/json' -d '{
 ## 验证
 
 ```bash
-python tests/smoke_pure.py         # 85 项：校验、规划、标定、错误
+python tests/smoke_pure.py         # 94 项：校验、规划、标定、错误
 python tests/install_harnesses.py  # 38 项：每一种 harness 方言，在临时目录里
-python tests/mcp_protocol.py       # 连上 sidecar 时 25 项（离线 20 项）：真实的 MCP 握手与真实的工具调用
+python tests/mcp_protocol.py       # 连上 sidecar 时 30 项（离线 25 项）：真实的 MCP 握手与真实的工具调用
 python tests/stdio_latency.py      # 握手 <5 秒、工具列表瞬时、工具调用有返回
 python tests/language_probe.py     # 每个 checkpoint 在各语言上实际能做什么
 laya-mcp doctor                    # 装了什么，以及 GPU 真正能做什么
 ```
 
-三个套件共 148 项检查，各自覆盖其它套件够不到的一层。`stdio_latency.py` 与 `language_probe.py` 需要模型，是测量而非断言，因此手工运行，其数字在上文被引用。
+三个套件共 162 项检查，各自覆盖其它套件够不到的一层。`stdio_latency.py` 与 `language_probe.py` 需要模型，是测量而非断言，因此手工运行，其数字在上文被引用。
 
 `smoke_pure.py` 不需要 torch、模型、网络或 harness 配置。`install_harnesses.py` 把每个 harness 重定向到临时目录，因为 `~/.claude.json` 是一个装着历史与逐项目状态的大共享文件，一个覆盖它的测试会比它能抓到的任何 bug 更糟。
 

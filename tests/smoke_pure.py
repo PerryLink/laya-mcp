@@ -228,6 +228,43 @@ def main() -> int:
     check("non-Latin state is not under-reserved",
           dense.state_tokens_estimated > 200, str(dense.state_tokens_estimated))
 
+    # Which end of an oversized state survives is a property of the *server*, not of
+    # the request, and the report is the only place a caller learns it. Before this
+    # the note was a fixed sentence saying the FRONT is kept, which would have become
+    # a lie the moment `--truncate-left` existed - and a caller reading a confident
+    # answer about the wrong end of their document is the failure this module is for.
+    left = plan_questions(
+        english,
+        {"body": "x" * 5000},
+        {"q": Question(type="noul", instructions="Is this here?")},
+        truncate_left=True,
+    )
+    check("truncate_left is carried onto the plan", left.truncate_left is True)
+    check("...and survives to_dict for the wire", left.to_dict()["truncate_left"] is True)
+    left_report = left.truncation_report()
+    check("the left-keeping report names the TAIL as what survived",
+          left_report is not None and left_report["state"]["kept"] == "tail",
+          str(left_report and left_report.get("state", {}).get("kept")))
+    check("...and says the front was discarded",
+          "discarding the front" in left_report["state"]["note"],
+          left_report["state"]["note"])
+    check("...and calls the survivor a suffix, not a prefix",
+          "suffix" in left_report["state"]["note"])
+
+    right_report = report["state"]
+    check("the default report still names the FRONT as what survived",
+          right_report["kept"] == "front", str(right_report.get("kept")))
+    check("...and says the tail was discarded",
+          "discarding the tail" in right_report["note"], right_report["note"])
+
+    # The warning has to move with it, for the same reason.
+    left_warned = [w for w in left.warnings if "discarded" in w]
+    right_warned = [w for w in plan.warnings if "discarded" in w]
+    check("the truncation warning names the front when keeping the tail",
+          any("front is likely" in w for w in left_warned), str(left_warned[:1]))
+    check("the truncation warning names the tail by default",
+          any("tail is likely" in w for w in right_warned), str(right_warned[:1]))
+
     print("\ncalibration")
     check("semantics string denies being P(correct)",
           "NOT the probability" in calibration.CONFIDENCE_SEMANTICS)
