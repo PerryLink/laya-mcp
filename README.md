@@ -196,13 +196,13 @@ accuracy is not there for your task, fit on your own domain or do not deploy it.
 ```bash
 python tests/smoke_pure.py         # 94 checks: validation, planning, calibration, errors
 python tests/install_harnesses.py  # 38 checks: every harness dialect, in a temp dir
-python tests/mcp_protocol.py       # 30 checks live (25 offline): a real MCP handshake and real tool calls
+python tests/mcp_protocol.py       # 37 checks live (32 offline): a real MCP handshake and real tool calls
 python tests/stdio_latency.py      # handshake <5 s, tools/list instant, tools/call returns
 python tests/language_probe.py     # what each checkpoint can actually do, per language
 laya-mcp doctor                    # what is installed, and what the GPU can really do
 ```
 
-162 checks in the three suites, and each covers a layer the others cannot reach.
+169 checks in the three suites, and each covers a layer the others cannot reach.
 `stdio_latency.py` and `language_probe.py` need a model and are measurements
 rather than assertions, so they are run by hand and their numbers are quoted
 above.

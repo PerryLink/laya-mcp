@@ -134,7 +134,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mcp.add_argument(
         "--filter", default=None,
-        help="expose only these tools, comma separated (e.g. noul,choice)",
+        help=(
+            "expose only these tools, comma separated (e.g. noul,choice). Short names and "
+            "registered names both work; a name that matches nothing is an error rather than "
+            "a server with no tools."
+        ),
     )
     # The model options are mirrored from `serve` on purpose. A harness registers
     # this command in a config file it never revisits, so anything it cannot pass

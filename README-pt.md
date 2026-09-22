@@ -139,13 +139,13 @@ A calibração torna uma probabilidade *honesta*; não consegue tornar um modelo
 ```bash
 python tests/smoke_pure.py         # 94 verificações: validação, planeamento, calibração, erros
 python tests/install_harnesses.py  # 38: cada dialeto de harness, num diretório temporário
-python tests/mcp_protocol.py       # 30 com sidecar (25 sem ele): um handshake MCP real e chamadas de ferramenta reais
+python tests/mcp_protocol.py       # 37 com sidecar (32 sem ele): um handshake MCP real e chamadas de ferramenta reais
 python tests/stdio_latency.py      # handshake <5 s, tools/list instantâneo, tools/call responde
 python tests/language_probe.py     # o que cada checkpoint consegue realmente fazer, por idioma
 laya-mcp doctor                    # o que está instalado, e o que a GPU consegue mesmo fazer
 ```
 
-162 verificações nas três suites, e cada uma cobre uma camada que as outras não alcançam. O `stdio_latency.py` e o `language_probe.py` precisam de um modelo e são medições, não asserções, por isso correm-se à mão e os seus números são citados acima.
+169 verificações nas três suites, e cada uma cobre uma camada que as outras não alcançam. O `stdio_latency.py` e o `language_probe.py` precisam de um modelo e são medições, não asserções, por isso correm-se à mão e os seus números são citados acima.
 
 O `smoke_pure.py` não precisa de torch, modelo, rede ou configuração de harness. O `install_harnesses.py` redireciona cada harness para um diretório temporário, porque o `~/.claude.json` é um ficheiro partilhado grande que guarda histórico e estado por projeto, e um teste que o sobrescrevesse seria um bug pior do que qualquer um que pudesse apanhar.
 

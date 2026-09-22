@@ -320,6 +320,27 @@ def build_server(backend: Backend, tools: Optional[Sequence[str]] = None):
             hint="install the extra: pip install 'laya-mcp[mcp]'",
         ) from exc
 
+    # Checked here as well as in `run_stdio`, because this is the function that
+    # actually registers a tool and it used to do so by matching names. A filter
+    # that matched nothing produced a server with an empty tool list and no error
+    # anywhere - a running MCP server that can do nothing, which reads to a harness
+    # exactly like a model that has no opinion. Cheap to check; expensive to debug.
+    if tools is not None:
+        unknown = sorted({t for t in tools if t not in TOOL_NAMES})
+        if unknown:
+            raise LayaMcpError(
+                f"no tool named {', '.join(unknown)}",
+                hint=(
+                    f"known tools: {', '.join(TOOL_NAMES)}; the `laya_` prefix is optional, "
+                    "so `--filter noul,choice` works"
+                ),
+            )
+        if not tools:
+            raise LayaMcpError(
+                "the tool filter selected nothing, so this server would expose no tools",
+                hint="omit --filter entirely to expose every tool",
+            )
+
     # `FastMCP` takes `name` and `instructions` but no `version`; the SDK reports
     # its own server version in the handshake. Passing one is a TypeError, which
     # the protocol test caught and the pure tests could not: they never build the
@@ -550,6 +571,30 @@ def _trim(payload: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def normalise_tool_filter(tools: Optional[Sequence[str]]) -> Optional[tuple[str, ...]]:
+    """Accept both the short tool names and the registered ones.
+
+    ``--filter noul,choice`` is what the CLI help advertises and what the DSH
+    bundle passes; the names actually registered are ``laya_noul`` and
+    ``laya_choice``. Before this the two disagreed in the worst possible way, which
+    only showed up when the bundle was finally pointed at it:
+
+    * ``run_stdio`` validated the raw text against the *registered* names, so the
+      documented spelling was rejected as unknown and the server refused to start;
+    * ``build_server`` did the registering by comparing ``"laya_noul" in tools``,
+      so the documented spelling matched nothing and it exposed an **empty** tool
+      list - silently, because ``build_server`` has no validation of its own.
+
+    Both spellings now mean the same thing, and a name that matches nothing is an
+    error rather than an empty server.
+    """
+    if not tools:
+        return None
+    return tuple(
+        raw if raw.startswith("laya_") else f"laya_{raw}" for raw in tools
+    )
+
+
 def run_stdio(
     *,
     sidecar: Optional[str] = None,
@@ -558,11 +603,12 @@ def run_stdio(
 ) -> int:
     """Serve MCP over stdio. Blocks until the client disconnects."""
     logging.basicConfig(stream=sys.stderr, level=logging.INFO)
-    unknown = [t for t in (tools or ()) if t not in (*PRIMITIVES_TOOL_NAMES, "laya_ask", "laya_plan")]
+    wanted_tools = normalise_tool_filter(tools)
+    unknown = [t for t in (wanted_tools or ()) if t not in TOOL_NAMES]
     if unknown:
         print(
             f"laya-mcp: unknown tool(s) in --filter: {', '.join(unknown)}; "
-            f"known: {', '.join(PRIMITIVES_TOOL_NAMES)}, laya_ask, laya_plan",
+            f"known: {', '.join(TOOL_NAMES)} (the `laya_` prefix is optional)",
             file=sys.stderr,
         )
         return 2
@@ -596,7 +642,7 @@ def run_stdio(
         backend.start_warm()
 
     try:
-        server = build_server(backend, tools)
+        server = build_server(backend, wanted_tools)
         server.run(transport="stdio")
     finally:
         backend.close()
@@ -605,3 +651,8 @@ def run_stdio(
 
 #: The tool names a caller may pass to ``--filter``.
 PRIMITIVES_TOOL_NAMES = ("laya_noul", "laya_choice", "laya_score")
+
+#: Every tool this server can expose, by the name it registers under. Defined here
+#: rather than beside its users because it depends on PRIMITIVES_TOOL_NAMES above;
+#: the functions that read it do so at call time, so the order is safe.
+TOOL_NAMES: tuple[str, ...] = ("laya_ask", *PRIMITIVES_TOOL_NAMES, "laya_plan")

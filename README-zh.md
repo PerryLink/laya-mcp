@@ -139,13 +139,13 @@ curl -s localhost:8787/ask -H 'content-type: application/json' -d '{
 ```bash
 python tests/smoke_pure.py         # 94 项：校验、规划、标定、错误
 python tests/install_harnesses.py  # 38 项：每一种 harness 方言，在临时目录里
-python tests/mcp_protocol.py       # 连上 sidecar 时 30 项（离线 25 项）：真实的 MCP 握手与真实的工具调用
+python tests/mcp_protocol.py       # 连上 sidecar 时 37 项（离线 32 项）：真实的 MCP 握手与真实的工具调用
 python tests/stdio_latency.py      # 握手 <5 秒、工具列表瞬时、工具调用有返回
 python tests/language_probe.py     # 每个 checkpoint 在各语言上实际能做什么
 laya-mcp doctor                    # 装了什么，以及 GPU 真正能做什么
 ```
 
-三个套件共 162 项检查，各自覆盖其它套件够不到的一层。`stdio_latency.py` 与 `language_probe.py` 需要模型，是测量而非断言，因此手工运行，其数字在上文被引用。
+三个套件共 169 项检查，各自覆盖其它套件够不到的一层。`stdio_latency.py` 与 `language_probe.py` 需要模型，是测量而非断言，因此手工运行，其数字在上文被引用。
 
 `smoke_pure.py` 不需要 torch、模型、网络或 harness 配置。`install_harnesses.py` 把每个 harness 重定向到临时目录，因为 `~/.claude.json` 是一个装着历史与逐项目状态的大共享文件，一个覆盖它的测试会比它能抓到的任何 bug 更糟。
 

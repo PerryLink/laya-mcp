@@ -139,13 +139,13 @@ curl -s localhost:8787/ask -H 'content-type: application/json' -d '{
 ```bash
 python tests/smoke_pure.py         # 94 जाँचें: सत्यापन, योजना, अंशशोधन, त्रुटियाँ
 python tests/install_harnesses.py  # 38: हर harness बोली, एक अस्थायी निर्देशिका में
-python tests/mcp_protocol.py       # sidecar के साथ 30 (उसके बिना 25): वास्तविक MCP handshake और वास्तविक tool calls
+python tests/mcp_protocol.py       # sidecar के साथ 37 (उसके बिना 32): वास्तविक MCP handshake और वास्तविक tool calls
 python tests/stdio_latency.py      # handshake <5 सेकंड, tools/list तत्काल, tools/call उत्तर देता है
 python tests/language_probe.py     # हर checkpoint प्रति भाषा वास्तव में क्या कर सकता है
 laya-mcp doctor                    # क्या स्थापित है, और GPU वास्तव में क्या कर सकता है
 ```
 
-तीन suites में 162 जाँचें, और हर एक ऐसी परत ढकती है जहाँ बाक़ी नहीं पहुँचतीं। `stdio_latency.py` और `language_probe.py` को मॉडल चाहिए और वे मापन हैं, अभिकथन नहीं, इसलिए वे हाथ से चलाए जाते हैं और उनके आँकड़े ऊपर उद्धृत हैं।
+तीन suites में 169 जाँचें, और हर एक ऐसी परत ढकती है जहाँ बाक़ी नहीं पहुँचतीं। `stdio_latency.py` और `language_probe.py` को मॉडल चाहिए और वे मापन हैं, अभिकथन नहीं, इसलिए वे हाथ से चलाए जाते हैं और उनके आँकड़े ऊपर उद्धृत हैं।
 
 `smoke_pure.py` को torch, मॉडल, नेटवर्क या harness कॉन्फ़िग की आवश्यकता नहीं। `install_harnesses.py` हर harness को अस्थायी निर्देशिका में पुनर्निर्देशित करता है, क्योंकि `~/.claude.json` इतिहास और प्रति-प्रोजेक्ट स्थिति रखने वाली बड़ी साझा फ़ाइल है और उसे मिटाने वाला परीक्षण अपनी पकड़ी जा सकने वाली किसी भी त्रुटि से बुरा होगा।
 

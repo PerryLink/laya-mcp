@@ -27,25 +27,38 @@
 # local snapshot and makes no network call at all, which also means it works
 # offline and behind a proxy.
 #
-# `--sidecar` is deliberately ABSENT. Pointing this at a `laya-mcp serve` is
-# faster — one model load shared by every session, ~175 ms per call — but it makes
-# every tool call fail until someone has a sidecar running, and a sidecar started
-# from a session is reaped with that session. The default here is the one that
-# works after a reboot: this server hosts the model itself, paying 10-20 s and
-# roughly 650 MB once per session.
+# `--sidecar` IS set. That reverses an earlier decision, and the earlier reasoning
+# was not wrong so much as outweighed — it said a session-spawned sidecar is reaped
+# with its session, so hosting the model here was "the one that works after a
+# reboot". What that cost, measured on this machine rather than argued:
 #
-# To switch to the shared sidecar, start one yourself in its own terminal:
+#   * two checkpoints resident at once — this server's own copy and the sidecar the
+#     sibling `laya` plugin expects — exhausted Windows' commit charge, and a
+#     safetensors load died with OS error 1455 (ERROR_COMMITMENT_LIMIT);
+#   * the `laya` row's tools were dead in every session that had no sidecar running,
+#     because `lifecycle: never` starts nothing;
+#   * seven tool schemas described one model.
 #
-#     laya-mcp serve --model-root <same path> --device cuda --port 8787
+# So the `laya` plugin row now spawns the sidecar and owns it, and this row is a
+# thin stdio proxy to the same process: exactly one checkpoint is resident, and both
+# surfaces work. `--filter` drops the two tools the plugin already provides —
+# `laya_ask` and `laya_plan` belong to the plugin, which renders them with the
+# harness's own presentation — leaving these three primitive conveniences, which it
+# does not provide. Delete the `--filter` pair to expose all five here instead.
 #
-# then add these two entries back under `args`:
+# The residual caveat, stated rather than buried: a sidecar the plugin started is
+# stopped when that session unmounts, so a second session that had attached to it
+# loses the tools until it restarts. A sidecar started outside any session — in its
+# own terminal, or by a scheduled task — is never touched by any session, which
+# removes the caveat entirely; while one is listening, `lifecycle: spawn` never
+# fires. Nothing here starts one of those.
 #
-#     - '--sidecar'
-#     - 'http://127.0.0.1:8787'
-#
-# With the flag present but nothing listening, every call returns a structured
-# `sidecar_unreachable` naming that fix — it does not hang, and it does not
-# silently fall back.
+# The model options below are unused while a sidecar is configured and are kept
+# anyway: a harness writes this command into a config file it never revisits, and
+# dropping them would make the self-hosting fallback impossible to restore without
+# editing this file. With the flag present but nothing listening, every call returns
+# a structured `sidecar_unreachable` naming the fix — it does not hang, and it does
+# not silently fall back to loading a model here.
 - insert:
     - id: laya-mcp
       name: '@deepseek-ai/dsh-mcp-client'
@@ -57,6 +70,10 @@
           - '-m'
           - 'laya_mcp'
           - 'mcp'
+          - '--sidecar'
+          - 'http://127.0.0.1:8787'
+          - '--filter'
+          - 'noul,choice,score'
           - '--model-root'
           - 'D:\Projects\laya-family\_models\laya'
         failOnStartupError: false

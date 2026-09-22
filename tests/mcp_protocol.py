@@ -90,7 +90,8 @@ async def main() -> int:
     # The direction is a server setting now, so the budget sentence is built rather
     # than fixed. All three variants are checked directly, because this suite only
     # ever spawns the `--sidecar` one and the other two would go unexercised.
-    from laya_mcp.mcp_server import _budget_note
+    from laya_mcp.cli import _parse_filter
+    from laya_mcp.mcp_server import TOOL_NAMES, _budget_note, normalise_tool_filter
 
     note_front = _budget_note(False)
     note_tail = _budget_note(True)
@@ -105,6 +106,31 @@ async def main() -> int:
     check("every variant still carries the budget warning",
           all("token budget" in n and "shortened" in n
               for n in (note_front, note_tail, note_sidecar)))
+
+    # `--filter` was documented with short names and validated against registered
+    # ones, so the documented spelling was rejected outright - and `build_server`,
+    # which registers by matching names, silently produced a server with no tools.
+    # Untested until the DSH bundle was pointed at it, which is why these exist.
+    expected_tools = {"laya_noul", "laya_choice", "laya_score"}
+    for spelling in ("noul,choice,score", "laya_noul,laya_choice,laya_score",
+                     " noul , choice , score "):
+        resolved = normalise_tool_filter(_parse_filter(spelling))
+        check(f"--filter {spelling.strip()!r} resolves to the registered names",
+              set(resolved or ()) == expected_tools, str(sorted(resolved or ())))
+    check("no --filter means every tool", normalise_tool_filter(None) is None)
+    check("the filter names are all real tools",
+          expected_tools <= set(TOOL_NAMES), str(TOOL_NAMES))
+
+    from laya_mcp.errors import LayaMcpError
+    from laya_mcp.mcp_server import Backend, build_server
+    from laya_mcp.worker import WorkerConfig
+
+    for bad, label in ((("laya_typo",), "an unknown tool name"), ((), "an empty filter")):
+        try:
+            build_server(Backend(sidecar="http://127.0.0.1:9", config=WorkerConfig()), bad)
+            check(f"--filter with {label} is refused rather than exposing nothing", False)
+        except LayaMcpError:
+            check(f"--filter with {label} is refused rather than exposing nothing", True)
 
     # Spawned exactly as a harness spawns it: the module form, not a console
     # script. On Windows a console script is a .cmd shim and the MCP stdio
