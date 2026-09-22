@@ -12,7 +12,7 @@ laya-mcp serve            # carrega o modelo uma vez, mantém-no quente em 127.0
 laya-mcp install          # regista-o no harness de agente que tiveres
 ```
 
-> **Estado: 0.1.0, em desenvolvimento.** O núcleo está implementado e a sua lógica pura está coberta por 66 verificações, mas ainda não foi exercitado de ponta a ponta contra um harness real em CI. As interfaces podem mudar antes de 1.0.
+> **Estado: 0.2.1, em desenvolvimento.** O núcleo está implementado e a sua lógica pura está coberta por 85 verificações, mas ainda não foi exercitado de ponta a ponta contra um harness real em CI. As interfaces podem mudar antes de 1.0.
 
 ---
 
@@ -125,7 +125,7 @@ Os números do próprio projeto a montante merecem ser repetidos, porque uma cam
 
 * **Os checkpoints base estão perto do acaso em zero-shot em decisões tipadas** — 0.362 para inglês contra uma **linha de base de classe maioritária de 0.461**. Adivinhar a resposta mais comum bate o modelo.
 * **O `score` é a primitiva mais fraca.** Medida independentemente em 35% contra os 70% do Jev numa tarefa ordinal de cinco níveis.
-* **A calibração precisa de dados etiquetados.** O ECE cru é 0.466 para inglês e 0.314 para multilingue, melhorando para 0.081 e 0.106 após o ajuste. Uma temperatura não se inventa; este pacote não finge o contrário.
+* **A calibração precisa de dados etiquetados.** O ECE cru é 0.466 para inglês e 0.314 para multilingue, melhorando para 0.081 e 0.106 após o ajuste. Uma temperatura não se inventa; este pacote não finge o contrário. Um ajuste que embate no limite da sua grelha de busca é registado em `saturated_buckets` como um limite, e não devolvido como temperatura: um limite descreve a amostra, não o modelo.
 * **O viés de posição é real.** Uma execução de fixture publicada respondeu «A» em 46 de 50 itens de escolha múltipla.
 * **A exatidão cai acima de ~20 opções**, segundo o autor.
 
@@ -136,15 +136,15 @@ A calibração torna uma probabilidade *honesta*; não consegue tornar um modelo
 ## Verificar
 
 ```bash
-python tests/smoke_pure.py         # 66 verificações: validação, planeamento, calibração, erros
-python tests/install_harnesses.py  # 35: cada dialeto de harness, num diretório temporário
-python tests/mcp_protocol.py       # 25: um handshake MCP real e chamadas de ferramenta reais
+python tests/smoke_pure.py         # 85 verificações: validação, planeamento, calibração, erros
+python tests/install_harnesses.py  # 38: cada dialeto de harness, num diretório temporário
+python tests/mcp_protocol.py       # 25 com sidecar (20 sem ele): um handshake MCP real e chamadas de ferramenta reais
 python tests/stdio_latency.py      # handshake <5 s, tools/list instantâneo, tools/call responde
 python tests/language_probe.py     # o que cada checkpoint consegue realmente fazer, por idioma
 laya-mcp doctor                    # o que está instalado, e o que a GPU consegue mesmo fazer
 ```
 
-126 verificações nas três suites, e cada uma cobre uma camada que as outras não alcançam. O `stdio_latency.py` e o `language_probe.py` precisam de um modelo e são medições, não asserções, por isso correm-se à mão e os seus números são citados acima.
+148 verificações nas três suites, e cada uma cobre uma camada que as outras não alcançam. O `stdio_latency.py` e o `language_probe.py` precisam de um modelo e são medições, não asserções, por isso correm-se à mão e os seus números são citados acima.
 
 O `smoke_pure.py` não precisa de torch, modelo, rede ou configuração de harness. O `install_harnesses.py` redireciona cada harness para um diretório temporário, porque o `~/.claude.json` é um ficheiro partilhado grande que guarda histórico e estado por projeto, e um teste que o sobrescrevesse seria um bug pior do que qualquer um que pudesse apanhar.
 

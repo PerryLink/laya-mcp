@@ -12,7 +12,7 @@ laya-mcp serve            # carga el modelo una vez, lo mantiene caliente en 127
 laya-mcp install          # lo registra en el harness de agente que tengas
 ```
 
-> **Estado: 0.1.0, en desarrollo.** El núcleo está implementado y su lógica pura está cubierta por 66 comprobaciones, pero todavía no se ha ejercitado de extremo a extremo contra un harness real en CI. Las interfaces pueden cambiar antes de 1.0.
+> **Estado: 0.2.1, en desarrollo.** El núcleo está implementado y su lógica pura está cubierta por 85 comprobaciones, pero todavía no se ha ejercitado de extremo a extremo contra un harness real en CI. Las interfaces pueden cambiar antes de 1.0.
 
 ---
 
@@ -125,7 +125,7 @@ Los números del propio proyecto aguas arriba merecen repetirse, porque una capa
 
 * **Los checkpoints base están cerca del azar en zero-shot sobre decisiones tipadas** — 0.362 para inglés frente a una **línea base de clase mayoritaria de 0.461**. Adivinar la respuesta más común supera al modelo.
 * **`score` es la primitiva más débil.** Medida independientemente en 35% frente al 70% de Jev en una tarea ordinal de cinco niveles.
-* **La calibración necesita datos etiquetados.** El ECE crudo es 0.466 para inglés y 0.314 para multilingüe, mejorando a 0.081 y 0.106 tras el ajuste. Una temperatura no se puede inventar; este paquete no pretende lo contrario.
+* **La calibración necesita datos etiquetados.** El ECE crudo es 0.466 para inglés y 0.314 para multilingüe, mejorando a 0.081 y 0.106 tras el ajuste. Una temperatura no se puede inventar; este paquete no pretende lo contrario. Un ajuste que choca con el borde de su rejilla de búsqueda se registra en `saturated_buckets` como una cota, no se devuelve como temperatura: una cota describe la muestra, no el modelo.
 * **El sesgo de posición es real.** Una ejecución de fixture publicada respondió «A» en 46 de 50 ítems de opción múltiple.
 * **La exactitud decae por encima de ~20 opciones**, según el autor.
 
@@ -136,15 +136,15 @@ La calibración hace que una probabilidad sea *honesta*; no puede hacer que un m
 ## Verificar
 
 ```bash
-python tests/smoke_pure.py         # 66 comprobaciones: validación, planificación, calibración, errores
-python tests/install_harnesses.py  # 35: cada dialecto de harness, en un directorio temporal
-python tests/mcp_protocol.py       # 25: un handshake MCP real y llamadas de herramienta reales
+python tests/smoke_pure.py         # 85 comprobaciones: validación, planificación, calibración, errores
+python tests/install_harnesses.py  # 38: cada dialecto de harness, en un directorio temporal
+python tests/mcp_protocol.py       # 25 con sidecar (20 sin él): un handshake MCP real y llamadas de herramienta reales
 python tests/stdio_latency.py      # handshake <5 s, tools/list instantáneo, tools/call responde
 python tests/language_probe.py     # qué puede hacer realmente cada checkpoint, por idioma
 laya-mcp doctor                    # qué está instalado, y qué puede hacer de verdad la GPU
 ```
 
-126 comprobaciones en las tres suites, y cada una cubre una capa que las otras no alcanzan. `stdio_latency.py` y `language_probe.py` necesitan un modelo y son mediciones, no aserciones, así que se ejecutan a mano y sus números se citan arriba.
+148 comprobaciones en las tres suites, y cada una cubre una capa que las otras no alcanzan. `stdio_latency.py` y `language_probe.py` necesitan un modelo y son mediciones, no aserciones, así que se ejecutan a mano y sus números se citan arriba.
 
 `smoke_pure.py` no necesita torch, modelo, red ni configuración de harness. `install_harnesses.py` redirige cada harness a un directorio temporal, porque `~/.claude.json` es un archivo compartido grande que guarda historial y estado por proyecto, y un test que lo sobrescribiera sería un bug peor que cualquiera que pudiera detectar.
 

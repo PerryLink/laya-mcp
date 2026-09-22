@@ -12,7 +12,7 @@ laya-mcp serve            # 加载一次模型，常驻在 127.0.0.1:8787
 laya-mcp install          # 注册到本机已有的任意 agent harness
 ```
 
-> **状态：0.1.0，开发中。** 核心已实现，纯逻辑部分由 66 项检查覆盖；但尚未在 CI 中经过真实 harness 的端到端验证。1.0 之前接口可能变动。
+> **状态：0.2.1，开发中。** 核心已实现，纯逻辑部分由 85 项检查覆盖；但尚未在 CI 中经过真实 harness 的端到端验证。1.0 之前接口可能变动。
 
 ---
 
@@ -125,7 +125,7 @@ curl -s localhost:8787/ask -H 'content-type: application/json' -d '{
 
 * **基础 checkpoint 在有类型决策上零样本接近随机**——英文 0.362，对 **0.461 的多数类基线**。猜最常见的答案能赢过模型。
 * **`score` 是最弱的 primitive。** 在一个五级有序任务上独立测得 35%，对比 Jev 的 70%。
-* **标定需要标注数据。** 原始 ECE 英文 0.466、多语言 0.314，拟合后改善到 0.081 与 0.106。温度是编不出来的；本包不会假装可以。
+* **标定需要标注数据。** 原始 ECE 英文 0.466、多语言 0.314，拟合后改善到 0.081 与 0.106。温度是编不出来的；本包不会假装可以。若拟合撞到搜索网格的边缘，它会作为「界」记入 `saturated_buckets`，而不是当作温度返回——因为界描述的是样本，不是模型。
 * **位置偏置是真实存在的。** 一次公开的 fixture 运行在 50 道多选题里 46 次选了「A」。
 * **超过约 20 个选项后准确率下滑**，据作者本人。
 
@@ -136,15 +136,15 @@ curl -s localhost:8787/ask -H 'content-type: application/json' -d '{
 ## 验证
 
 ```bash
-python tests/smoke_pure.py         # 66 项：校验、规划、标定、错误
-python tests/install_harnesses.py  # 35 项：每一种 harness 方言，在临时目录里
-python tests/mcp_protocol.py       # 25 项：真实的 MCP 握手与真实的工具调用
+python tests/smoke_pure.py         # 85 项：校验、规划、标定、错误
+python tests/install_harnesses.py  # 38 项：每一种 harness 方言，在临时目录里
+python tests/mcp_protocol.py       # 连上 sidecar 时 25 项（离线 20 项）：真实的 MCP 握手与真实的工具调用
 python tests/stdio_latency.py      # 握手 <5 秒、工具列表瞬时、工具调用有返回
 python tests/language_probe.py     # 每个 checkpoint 在各语言上实际能做什么
 laya-mcp doctor                    # 装了什么，以及 GPU 真正能做什么
 ```
 
-三个套件共 126 项检查，各自覆盖其它套件够不到的一层。`stdio_latency.py` 与 `language_probe.py` 需要模型，是测量而非断言，因此手工运行，其数字在上文被引用。
+三个套件共 148 项检查，各自覆盖其它套件够不到的一层。`stdio_latency.py` 与 `language_probe.py` 需要模型，是测量而非断言，因此手工运行，其数字在上文被引用。
 
 `smoke_pure.py` 不需要 torch、模型、网络或 harness 配置。`install_harnesses.py` 把每个 harness 重定向到临时目录，因为 `~/.claude.json` 是一个装着历史与逐项目状态的大共享文件，一个覆盖它的测试会比它能抓到的任何 bug 更糟。
 

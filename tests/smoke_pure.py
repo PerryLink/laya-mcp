@@ -157,6 +157,34 @@ def main() -> int:
     oom = translate(RuntimeError("CUDA out of memory"))
     check("CUDA OOM -> out_of_memory", oom.code.value == "out_of_memory")
     check("out_of_memory is retryable", oom.to_dict()["retryable"] is True)
+
+    # Observed on this machine, not imagined: exhausting Windows' commit charge
+    # during a safetensors load arrived as a plain OSError with errno=1455 (a raw
+    # Win32 ERROR_COMMITMENT_LIMIT, unmapped to any POSIX name), winerror=None,
+    # and a localized message - "the paging file is too small", in Chinese, with
+    # no ASCII in it at all. Both of the older classifiers missed that shape: the
+    # message contains no "out of memory", and the class name is OSError rather
+    # than OutOfMemoryError. It reached the caller as `internal` - HTTP 500,
+    # retryable false - when the honest answer is 503 and retryable.
+    localized = "\u9875\u9762\u6587\u4ef6\u592a\u5c0f\uff0c\u65e0\u6cd5\u5b8c\u6210\u64cd\u4f5c"
+    paging = translate(OSError(1455, localized))
+    check("a localized Windows commit failure -> out_of_memory",
+          paging.code.value == "out_of_memory", paging.code.value)
+    check("...and is retryable rather than a 500",
+          paging.http_status == 503 and paging.to_dict()["retryable"] is True,
+          str(paging.http_status))
+    check("...and says what to do about it", bool(paging.to_dict().get("hint")))
+    check("ENOMEM -> out_of_memory",
+          translate(OSError(12, "Cannot allocate memory")).code.value == "out_of_memory",
+          translate(OSError(12, "Cannot allocate memory")).code.value)
+    check("a bare MemoryError -> out_of_memory",
+          translate(MemoryError("boom")).code.value == "out_of_memory")
+    # The other direction: not every OSError is a memory failure, and widening the
+    # check until it swallowed them all would be its own bug.
+    plain = translate(OSError("something else went wrong"))
+    check("an OSError with no memory errno stays internal",
+          plain.code.value == "internal", plain.code.value)
+
     # Measured against the real checkpoint: a choice with no criteria raises
     # AttributeError('NoneType' ... 'items'), not KeyError. Reading the source
     # alone would have missed this, which is why the fix is pinned by a test.
@@ -264,6 +292,66 @@ def main() -> int:
     check("temperature_for falls back to the per-primitive value",
           calibration.CalibrationEntry(checkpoint="x", temperatures=[1.0, 2.0, 3.0])
           .temperature_for("score", 4) == 2.0)
+
+    # A grid search can only return a point that is in the grid, so when the
+    # optimum lies outside it the search returns an edge and says nothing. The bug
+    # this pins: the exponent range stopped at 1.2**-24 (0.01258) while the filter
+    # advertised a floor of 0.01, so the *range* bound the search, the filter
+    # removed nothing, and two real fits came back with that floor as an ordinary
+    # temperature.
+    bounds = calibration.TEMPERATURE_GRID_BOUNDS
+    grid = calibration.TEMPERATURE_GRID
+    check("the grid never leaves its declared bounds",
+          min(grid) >= bounds[0] and max(grid) <= bounds[1],
+          f"{min(grid)!r} .. {max(grid)!r}")
+    check("the grid reaches below the old exponent-range floor (1.2**-24)",
+          min(grid) < 1.2 ** -24, repr(min(grid)))
+    check("the range does not stop before the bound does",
+          min(grid) / 1.2 < bounds[0] and max(grid) * 1.2 > bounds[1],
+          f"{min(grid) / 1.2!r} .. {max(grid) * 1.2!r}")
+    check("an interior temperature is not called saturated",
+          not calibration.temperature_is_saturated(1.0))
+    check("the grid floor reads as saturated",
+          calibration.temperature_is_saturated(min(grid)))
+    check("the grid ceiling reads as saturated",
+          calibration.temperature_is_saturated(max(grid)))
+
+    # A confident and always-correct sample has no interior optimum: the loss
+    # falls as the distribution sharpens, so the fit must run to the floor - and
+    # must say that is what happened rather than return the floor as a result.
+    hard = [[0.99, 0.01]] * 40
+    fitted, _ = calibration.fit_temperature(hard, [0] * 40)
+    check("a separable sample drives the fit onto the floor", fitted == min(grid), repr(fitted))
+    check("...and that fit reports itself as saturated",
+          calibration.temperature_is_saturated(fitted))
+
+    saturated = calibration.fit_from_examples(
+        "english", [{"probabilities": [0.99, 0.01], "outcome": 0, "type": "choice"}] * 40
+    )
+    check("a saturated bucket is named on the entry",
+          saturated.saturated_buckets == ["choice:2"], str(saturated.saturated_buckets))
+    check("a saturated value is stored unrounded, so the flag and the value agree",
+          calibration.temperature_is_saturated(saturated.by_options["choice:2"]),
+          repr(saturated.by_options.get("choice:2")))
+    check("the notes call the value a bound rather than an optimum",
+          "bounds rather than optima" in (saturated.notes or ""), str(saturated.notes))
+
+    # The flag is the only thing saying the number is not a measurement, so losing
+    # it on reload would silently turn a bound back into a temperature.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as directory:
+        store_path = os.path.join(directory, "calibration.json")
+        store = calibration.CalibrationStore(store_path)
+        store.put(saturated)
+        store.save()
+        reloaded = calibration.CalibrationStore(store_path)
+        check("the store round-trips without a load error",
+              reloaded.load_error is None, str(reloaded.load_error))
+        restored = reloaded.get("english")
+        check("saturated_buckets survives the store",
+              restored is not None and restored.saturated_buckets == ["choice:2"],
+              str(getattr(restored, "saturated_buckets", None)))
 
     print("\nbanding (a calibrated probability is not a decision)")
     check("0.20 -> no", _band(0.20) == "no")

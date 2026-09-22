@@ -171,6 +171,52 @@ def brier_score(probabilities: Sequence[float], correct: Sequence[bool]) -> floa
     return total / len(probabilities)
 
 
+#: The numeric bounds of the default grid, as ``(low, high)``.
+TEMPERATURE_GRID_BOUNDS = (0.01, 100.0)
+
+#: The geometric grid :func:`fit_temperature` searches when given none.
+#:
+#: The exponent range runs *wider* than the bounds on purpose. An earlier version
+#: built the range as ``range(-24, 25)`` and then filtered it to
+#: ``0.01 <= t <= 100``, which reads as though 0.01 were the floor while the
+#: range actually stopped first: the smallest reachable temperature was
+#: ``1.2 ** -24 == 0.01258``, and the filter never removed anything. Two real
+#: fits then landed on that floor, and the floor was returned as an ordinary
+#: result.
+#:
+#: A fit that lands on the edge of its search space has not found a temperature;
+#: it has reported that the optimum is somewhere the search could not reach. On a
+#: small sample that usually means "as sharp as possible", which is a statement
+#: about the sample, not about the checkpoint. The range therefore now extends
+#: past the bounds so that the *bounds* are what bind, and
+#: :func:`temperature_is_saturated` lets a caller see when they did.
+TEMPERATURE_GRID: tuple[float, ...] = tuple(
+    t
+    for t in (1.2**step for step in range(-40, 41))
+    if TEMPERATURE_GRID_BOUNDS[0] <= t <= TEMPERATURE_GRID_BOUNDS[1]
+)
+
+
+def temperature_is_saturated(
+    temperature: float,
+    grid: Optional[Sequence[float]] = None,
+) -> bool:
+    """Whether a fitted temperature sits on the edge of the grid it was fitted on.
+
+    True means the search ran into its own boundary, so the returned value is a
+    bound rather than an optimum and should not be quoted as a calibrated
+    temperature. Every ``math.isclose`` here is against the grid actually used,
+    including a caller-supplied one.
+    """
+    points = tuple(grid) if grid is not None else TEMPERATURE_GRID
+    if not points:
+        return False
+    low, high = min(points), max(points)
+    return math.isclose(temperature, low, rel_tol=1e-9) or math.isclose(
+        temperature, high, rel_tol=1e-9
+    )
+
+
 def fit_temperature(
     probabilities: Sequence[Sequence[float]],
     correct_outcome: Sequence[int],
@@ -188,13 +234,19 @@ def fit_temperature(
     gradient step diverges and returns a plausible-looking nonsense temperature.
     The grid is geometric so it spends its resolution where temperatures
     actually land.
+
+    A grid search has one failure mode of its own, and this used to have it: the
+    optimum can lie outside the grid, in which case the search returns the
+    boundary and says nothing. Check the result with
+    :func:`temperature_is_saturated` before treating it as a measurement.
     """
     if not probabilities or len(probabilities) != len(correct_outcome):
         raise ValueError("probabilities and correct_outcome must be the same non-zero length")
 
     if grid is None:
-        grid = [1.0 * (1.2 ** step) for step in range(-24, 25)]
-        grid = [t for t in grid if 0.01 <= t <= 100.0]
+        grid = TEMPERATURE_GRID
+    if not grid:
+        raise ValueError("grid must contain at least one temperature")
 
     best_t = 1.0
     best_nll = float("inf")
@@ -238,6 +290,16 @@ class CalibrationEntry:
     brier_after: Optional[float] = None
     fitted_at: Optional[str] = None
     notes: Optional[str] = None
+
+    saturated_buckets: list[str] = field(default_factory=list)
+    """Buckets whose fit landed on the edge of the search grid.
+
+    A bucket named here has a temperature that is a *bound*, not an optimum: the
+    data asked for something sharper (or flatter) than the grid could express, so
+    the value is an artefact of where the search stopped. Kept on the entry
+    rather than only in ``notes`` because a caller deciding whether to apply a
+    temperature should not have to parse prose to find out.
+    """
 
     def temperature_for(self, qtype: str, option_count: int) -> float:
         """The temperature to use for a question, preferring a fitted bucket.
@@ -353,6 +415,9 @@ class CalibrationStore:
                     brier_after=_opt_float(value.get("brier_after")),
                     fitted_at=value.get("fitted_at"),
                     notes=value.get("notes"),
+                    saturated_buckets=[
+                        str(b) for b in (value.get("saturated_buckets") or [])
+                    ],
                 )
             except (TypeError, ValueError):
                 # One malformed entry should not discard the rest.
@@ -422,6 +487,7 @@ def fit_from_examples(
         grouped.setdefault(bucket_for(qtype, len(probs)), []).append((probs, outcome, qtype))
 
     by_options: dict[str, float] = {}
+    saturated: list[str] = []
     all_probs: list[list[float]] = []
     all_outcomes: list[int] = []
     # The primitive travels with each distribution. Without it the recalculation
@@ -446,7 +512,15 @@ def fit_from_examples(
 
         if len(rows) >= min_samples:
             temperature, _ = fit_temperature(probs, outcomes)
-            by_options[bucket] = round(temperature, 6)
+            if temperature_is_saturated(temperature):
+                # Stored unrounded, because the fitted value *is* the grid point
+                # and rounding it to six places moves it far enough off the edge
+                # that a later `temperature_is_saturated` on the stored number
+                # would say no. The flag and the value have to agree.
+                by_options[bucket] = temperature
+                saturated.append(bucket)
+            else:
+                by_options[bucket] = round(temperature, 6)
 
     ece_before = expected_calibration_error(confidences_before, correct_before)
     brier_before = (
@@ -481,9 +555,16 @@ def fit_from_examples(
         brier_before=brier_before,
         brier_after=brier_after,
         fitted_at=datetime.now(timezone.utc).isoformat(),
+        saturated_buckets=saturated,
         notes=(
             "buckets with fewer than "
             f"{min_samples} examples kept temperature 1.0"
+            + (
+                "; fits that ran into the edge of the grid and are bounds rather "
+                f"than optima: {', '.join(sorted(saturated))}"
+                if saturated
+                else ""
+            )
         ),
     )
     return entry

@@ -246,6 +246,36 @@ class DeviceDegradedError(LayaMcpError):
     code = ErrorCode.DEVICE_DEGRADED
 
 
+#: errno values that mean the host refused to hand over memory.
+#:
+#: 12 is ``ENOMEM`` on both POSIX and Windows. 8 is ``ERROR_NOT_ENOUGH_MEMORY``,
+#: and 1455 is ``ERROR_COMMITMENT_LIMIT`` - "the paging file is too small for this
+#: operation to complete".
+#:
+#: The numbers matter because a Windows OSError can carry a raw Win32 code as its
+#: ``errno`` when there is no POSIX equivalent to map onto. Measured on this
+#: machine: a safetensors load that exhausted Windows' commit charge arrived as a
+#: plain ``OSError`` with ``errno=1455`` and ``winerror=None``, and its message was
+#: localized - "the paging file is too small" in Chinese, containing no ASCII at
+#: all. A classifier keying on the words "out of memory", or on a class name
+#: containing ``OutOfMemory`` (a torch CUDA fault is a different type entirely),
+#: matches neither, so the failure was reported as a generic internal fault:
+#: HTTP 500 with ``retryable: false``, when the honest answer is 503 and
+#: retryable. This is why the check below asks the errno first and the words last.
+_MEMORY_ERRNOS = frozenset({12, 8, 1455})
+
+
+def _is_memory_failure(exc: BaseException) -> bool:
+    """Whether this is the host declining to commit memory."""
+    if isinstance(exc, MemoryError):
+        return True
+    if getattr(exc, "errno", None) in _MEMORY_ERRNOS:
+        return True
+    if getattr(exc, "winerror", None) in _MEMORY_ERRNOS:
+        return True
+    return "OutOfMemory" in type(exc).__name__ or "out of memory" in str(exc).lower()
+
+
 def translate(exc: BaseException, *, question_id: Optional[str] = None) -> LayaMcpError:
     """Map an exception from Laya onto a :class:`LayaMcpError`.
 
@@ -337,8 +367,17 @@ def translate(exc: BaseException, *, question_id: Optional[str] = None) -> LayaM
         return InternalError(f"unexpected AttributeError: {exc}", cause=exc)
 
     name = type(exc).__name__
-    if "OutOfMemory" in name or "out of memory" in str(exc).lower():
-        return OutOfMemoryError(str(exc), cause=exc)
+    if _is_memory_failure(exc):
+        return OutOfMemoryError(
+            str(exc) or f"{name} while loading or running the model",
+            hint=(
+                "the host could not commit the memory this needs. A checkpoint that was "
+                "not preloaded is loaded on first use, so the request that names it can be "
+                "the one that runs out; preload it at startup with `--model` / `--also`, "
+                "or free memory and retry. A host resource limit, not a bad request."
+            ),
+            cause=exc,
+        )
 
     if "huggingface" in type(exc).__module__ or "ConnectionError" in name:
         return WeightsUnavailableError(

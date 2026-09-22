@@ -41,7 +41,7 @@ from typing import Any, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
 from . import __version__
-from .errors import LayaMcpError
+from .errors import LayaMcpError, translate
 from .protocol import PRIMITIVES, AskRequest, Question
 from .worker import LayaWorker, WorkerConfig
 
@@ -161,10 +161,15 @@ class _Handler(BaseHTTPRequestHandler):
             return
         except Exception as exc:  # noqa: BLE001
             log.exception("unhandled failure in ask")
-            self._send(
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-                {"ok": False, "error": "internal", "message": f"{type(exc).__name__}: {exc}"},
-            )
+            # Through the same mapping as everything else, rather than a payload
+            # hand-rolled here. The two differed: this one carried no `hint`, so
+            # the only failures that reached a caller without a suggested fix were
+            # the unanticipated ones - exactly the failures a caller cannot
+            # diagnose alone. Routing it also means a recognisable cause is
+            # classified even when it escapes as a bare exception, which is how a
+            # Windows commit-charge exhaustion was arriving as `internal` (500,
+            # not retryable) instead of `out_of_memory` (503, retryable).
+            self._send_error_payload(translate(exc))
             return
         self._send(HTTPStatus.OK, {"ok": True, **response.to_dict()})
 

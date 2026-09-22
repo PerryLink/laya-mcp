@@ -15,8 +15,8 @@ laya-mcp serve            # loads the model once, keeps it warm on 127.0.0.1:878
 laya-mcp install          # registers it with whichever agent harness you have
 ```
 
-> **Status: 0.1.0, work in progress.** The core is implemented and its pure logic
-> is covered by 66 checks, but it has not yet been exercised end-to-end against a
+> **Status: 0.2.1, work in progress.** The core is implemented and its pure logic
+> is covered by 85 checks, but it has not yet been exercised end-to-end against a
 > live harness in CI. Interfaces may move before 1.0.
 
 ---
@@ -178,7 +178,9 @@ implies otherwise is lying to you.
   Jev's 70% on a five-level ordinal task.
 * **Calibration needs labelled data.** Raw ECE is 0.466 for English and 0.314 for
   multilingual, improving to 0.081 and 0.106 after fitting. A temperature cannot
-  be invented; this package will not pretend to.
+  be invented; this package will not pretend to. A fit that runs into the edge of
+  its search grid is recorded in `saturated_buckets` as a bound rather than
+  returned as a temperature, because a bound describes the sample, not the model.
 * **Position bias is real.** One published fixture run answered "A" on 46 of 50
   multiple-choice items.
 * **Accuracy falls off above ~20 options**, per the author.
@@ -191,15 +193,15 @@ accuracy is not there for your task, fit on your own domain or do not deploy it.
 ## Verify
 
 ```bash
-python tests/smoke_pure.py         # 66 checks: validation, planning, calibration, errors
-python tests/install_harnesses.py  # 35 checks: every harness dialect, in a temp dir
-python tests/mcp_protocol.py       # 25 checks: a real MCP handshake and real tool calls
+python tests/smoke_pure.py         # 85 checks: validation, planning, calibration, errors
+python tests/install_harnesses.py  # 38 checks: every harness dialect, in a temp dir
+python tests/mcp_protocol.py       # 25 checks live (20 offline): a real MCP handshake and real tool calls
 python tests/stdio_latency.py      # handshake <5 s, tools/list instant, tools/call returns
 python tests/language_probe.py     # what each checkpoint can actually do, per language
 laya-mcp doctor                    # what is installed, and what the GPU can really do
 ```
 
-126 checks in the three suites, and each covers a layer the others cannot reach.
+148 checks in the three suites, and each covers a layer the others cannot reach.
 `stdio_latency.py` and `language_probe.py` need a model and are measurements
 rather than assertions, so they are run by hand and their numbers are quoted
 above.
