@@ -395,6 +395,45 @@ class BudgetPlan:
         return report
 
 
+def _count_with(tokenizer: Any, text: str) -> Optional[int]:
+    """Token count for `text`, or None when this object cannot supply one.
+
+    TWO PROTOCOLS, because the two libraries in play expose different ones and
+    accepting only the first would silently disable the fix:
+
+    * transformers' ``PreTrainedTokenizerFast`` is callable and returns a mapping:
+      ``tokenizer(text, add_special_tokens=False)["input_ids"]``.
+    * a bare ``tokenizers.Tokenizer`` -- which is what ``tokenizer.json`` loads
+      into, and what the model's own configuration points at -- is NOT callable
+      that way; it exposes ``.encode(text).ids``.
+
+    An earlier version handled only the first. A caller passing the second got a
+    TypeError, which the surrounding code caught, warned about, and answered with
+    the character estimate -- so the state budget stayed an estimate while the
+    code looked like it was counting. Returning None here (rather than raising)
+    keeps that fallback honest and keeps the warning, but the second protocol is
+    now handled so the fallback is the exception rather than the norm.
+    """
+    # transformers protocol first: it applies the model's own post-processing.
+    try:
+        out = tokenizer(text, add_special_tokens=False)
+        ids = out["input_ids"]
+        return len(ids)
+    except Exception:  # noqa: BLE001 - try the next protocol
+        pass
+    # huggingface `tokenizers` protocol.
+    try:
+        encoded = tokenizer.encode(text, add_special_tokens=False)
+        ids = getattr(encoded, "ids", None)
+        if ids is None and isinstance(encoded, (list, tuple)):
+            ids = encoded           # some wrappers return the ids directly
+        if ids is not None:
+            return len(ids)
+    except Exception:  # noqa: BLE001 - an object that can count neither way
+        pass
+    return None
+
+
 def plan_questions(
     capability: Capability,
     state: Any,
@@ -428,17 +467,16 @@ def plan_questions(
     per_token = 1.0 if dense else _CHARS_PER_TOKEN
 
     if tokenizer is not None:
-        try:
-            state_tokens = len(
-                tokenizer(state_text, add_special_tokens=False)["input_ids"]
-            )
-            exact = True
-        except Exception:  # noqa: BLE001 - a tokenizer that cannot count is not fatal
+        counted = _count_with(tokenizer, state_text)
+        if counted is None:
             state_tokens = int(chars / per_token * _SAFETY)
             exact = False
             warnings.append(
                 "the tokenizer could not count the state, so the state budget is an estimate"
             )
+        else:
+            state_tokens = counted
+            exact = True
     else:
         state_tokens = int(chars / per_token * _SAFETY)
         exact = False

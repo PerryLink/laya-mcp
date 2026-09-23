@@ -350,17 +350,19 @@ class LayaWorker:
         for tok in candidates:
             if tok is None:
                 continue
-            # Must be callable WITH `add_special_tokens`, i.e. the transformers
-            # protocol. A bare tokenizers.Tokenizer is callable too, so probe the
-            # actual call rather than testing `callable`.
-            try:
-                probe = tok("probe", add_special_tokens=False)
-                if isinstance(probe, dict) and "input_ids" in probe:
-                    self._tokenizers[name] = tok
-                    log.debug("tokenizer captured for checkpoint %s", name)
-                    return
-            except Exception:  # noqa: BLE001 - an unusable tokenizer is not fatal
-                continue
+            # Probe with the SAME function `planning` will use, so the two cannot
+            # disagree about what counts as usable. An earlier version of this
+            # check tested only the transformers call shape and therefore rejected
+            # a bare `tokenizers.Tokenizer` -- which is what `tokenizer.json` loads
+            # into, and what Laya's own configuration points at. The plan would
+            # then have fallen back to the character estimate while this code
+            # looked like it had installed a fix.
+            from .planning import _count_with
+
+            if _count_with(tok, "probe") is not None:
+                self._tokenizers[name] = tok
+                log.debug("tokenizer captured for checkpoint %s", name)
+                return
         log.debug("no usable tokenizer on the loaded agent for %s; "
                   "the state budget stays a character estimate", name)
 

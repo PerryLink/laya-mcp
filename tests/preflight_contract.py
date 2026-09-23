@@ -147,6 +147,37 @@ def main() -> int:
           broken.exact is False and any("estimate" in w for w in broken.warnings),
           f"exact={broken.exact} warnings={broken.warnings}")
 
+    # ---- E. BOTH tokenizer protocols must be accepted -------------------------
+    #
+    # This is the difference between a fix and the appearance of one. `planning`
+    # originally supported only the transformers call shape; a bare
+    # `tokenizers.Tokenizer` -- which is what `tokenizer.json` loads into, and
+    # what this project's own measurements use -- raised TypeError, was caught,
+    # warned, and answered with the character estimate. The budget stayed wrong
+    # while the code looked repaired.
+    class BareTokenizersStyle:
+        """The `tokenizers` library's shape: .encode(...).ids, not callable."""
+
+        class _Encoded:
+            def __init__(self, n): self.ids = list(range(n))
+
+        def encode(self, text, add_special_tokens=False):
+            return BareTokenizersStyle._Encoded(max(1, len(text) // 8))
+
+    bare = plan_questions(cap, state, {"q1": noul}, tokenizer=BareTokenizersStyle())
+    check("E the bare tokenizers.Tokenizer protocol is accepted",
+          bare.exact is True,
+          f"exact={bare.exact} warnings={bare.warnings}")
+    check("E and it produces the same count as the transformers shape",
+          bare.state_tokens_estimated == exact.state_tokens_estimated,
+          f"bare={bare.state_tokens_estimated} transformers={exact.state_tokens_estimated}")
+
+    # An object exposing neither protocol must still be refused rather than
+    # crashing the planner.
+    neither = plan_questions(cap, state, {"q1": noul}, tokenizer=object())
+    check("E an object with neither protocol falls back rather than raising",
+          neither.exact is False and neither.state_tokens_estimated > 0)
+
     print()
     if FAILURES:
         print(f"RESULT: {len(FAILURES)} failure(s) of {CHECKS} checks")
