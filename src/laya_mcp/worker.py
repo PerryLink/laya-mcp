@@ -221,6 +221,12 @@ class LayaWorker:
         self._loaded = False
         self._load_error: Optional[str] = None
         self._capabilities: dict[str, Capability] = {}
+        #: The loaded checkpoint's own tokenizer, keyed by checkpoint name. Kept
+        #: because the budget preflight otherwise falls back to a character
+        #: estimate that under-reserves on JSON, code and CJK; the object that can
+        #: count exactly is obtained here, at load time, and was previously
+        #: discarded. See `_capture_tokenizer` for why it is looked up defensively.
+        self._tokenizers: dict[str, Any] = {}
         self._degraded = False
         self._requested_device = self.config.device
         self._calibration = CalibrationStore(self.config.calibration_path)
@@ -306,6 +312,61 @@ class LayaWorker:
                 raise translate(exc) from exc
             self._apply_overrides(agent)
             self._capabilities[name] = self._describe(name, agent)
+            self._capture_tokenizer(name, agent)
+
+    def _capture_tokenizer(self, name: str, agent: Any) -> None:
+        """Keep the loaded agent's tokenizer, if it has one we can call.
+
+        WHY this exists: `planning.plan_questions` accepts a `tokenizer` argument
+        and uses it to turn the state budget from a character estimate into a real
+        token count. No caller ever passed one, so `exact` was `false` on every
+        response and the estimate alone decided `fits` -- and that estimate is the
+        one that UNDER-reserves on JSON (1.45x), source code (1.075x), CJK (2.1x)
+        and CSV (2.15x). Those are the input types this module's own docstring says
+        it serves, so the preflight could report `fits` for a state the model then
+        silently truncated.
+
+        WHY it is defensive rather than a plain attribute read: `planning` calls the
+        tokenizer as ``tokenizer(text, add_special_tokens=False)["input_ids"]``,
+        which is the transformers `PreTrainedTokenizerFast` protocol. A bare
+        ``tokenizers.Tokenizer`` -- what `tokenizer.json` loads into -- has only
+        ``.encode(text).ids`` and would raise TypeError, and that raise is caught
+        inside `planning`, which then emits a warning and falls back to the SAME
+        estimate. A wrong object there fails silently, which is the failure mode
+        this whole change is about, so the callable shape is verified here instead.
+
+        Laya's own tokenizer location has moved between revisions, so several
+        attributes are tried; if none works, the estimate remains in force and the
+        planner says so through `exact`.
+        """
+        candidates = []
+        for attr in ("tokenizer", "tok", "tokenizer_fast"):
+            if hasattr(agent, attr):
+                candidates.append(getattr(agent, attr))
+        cfg = getattr(agent, "cfg", None)
+        if isinstance(cfg, dict) and "tokenizer" in cfg:
+            candidates.append(cfg["tokenizer"])
+
+        for tok in candidates:
+            if tok is None:
+                continue
+            # Must be callable WITH `add_special_tokens`, i.e. the transformers
+            # protocol. A bare tokenizers.Tokenizer is callable too, so probe the
+            # actual call rather than testing `callable`.
+            try:
+                probe = tok("probe", add_special_tokens=False)
+                if isinstance(probe, dict) and "input_ids" in probe:
+                    self._tokenizers[name] = tok
+                    log.debug("tokenizer captured for checkpoint %s", name)
+                    return
+            except Exception:  # noqa: BLE001 - an unusable tokenizer is not fatal
+                continue
+        log.debug("no usable tokenizer on the loaded agent for %s; "
+                  "the state budget stays a character estimate", name)
+
+    def _tokenizer_for(self, name: str) -> Any:
+        """The tokenizer for `name`, or None when none was captured."""
+        return self._tokenizers.get(name)
 
     def _build_local_router(self, laya_module: Any, root: str, names: Sequence[str]) -> Any:
         """A router whose checkpoints all come from one local directory."""
@@ -484,6 +545,7 @@ class LayaWorker:
             capability,
             request.state,
             request.questions,
+            tokenizer=self._tokenizer_for(checkpoint),
             truncate_left=self.config.truncate_left,
         )
         plan.warnings = (*plan.warnings, *self._request_warnings(request, capability))
@@ -530,6 +592,7 @@ class LayaWorker:
             capability,
             request.state,
             request.questions,
+            tokenizer=self._tokenizer_for(checkpoint),
             truncate_left=self.config.truncate_left,
         )
         plan.warnings = (*plan.warnings, *self._request_warnings(request, capability))

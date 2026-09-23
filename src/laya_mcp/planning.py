@@ -89,13 +89,90 @@ def _looks_non_latin(text: str, sample: int = 4000) -> bool:
     scripts are close to one token per character, so treating them as four would
     under-reserve by 4x and produce exactly the silent truncation this module
     exists to prevent.
+
+    THREE DEFECTS FIXED HERE, all of which made the guard miss CJK and fall back
+    to the Latin ratio -- the under-reserving direction:
+
+    1. It averaged over ``text[:sample]`` only, so a document whose first 4,000
+       characters are English and whose remainder is CJK was classified Latin.
+       Now it samples windows spread across the whole text and takes the densest,
+       because one dense region is enough to overflow the budget.
+
+    2. Consequently the result was not monotone in length: on this repository's
+       Chinese manuscript the flag flipped True at 3 chars, False at 239, True at
+       831 -- so a purely Chinese state of 239-830 characters was measured with
+       the *Latin* ratio and the budget was under-reserved by 2.5x. Sampling the
+       whole text removes the prefix dependence.
+
+    3. ``json.dumps(..., ensure_ascii=True)`` -- the stdlib default -- escapes CJK
+       to ``\\uXXXX``, leaving ASCII letters ``u``/``e``/``d``/``f`` as the only
+       letters in the sample. The old test then measured a Latin fraction of 1.000
+       and returned False for wholly Chinese content, giving a 2.4x under-estimate.
+       Escaped CJK is now counted as CJK.
+
+    The bias is deliberate: a false positive costs a slightly over-reserved
+    budget; a false negative costs silently truncated evidence.
     """
-    head = text[:sample]
-    letters = [c for c in head if c.isalpha()]
-    if not letters:
+    if not text:
         return False
-    latin = sum(1 for c in letters if ord(c) < 0x0250)
-    return (latin / len(letters)) < 0.5
+
+    # 3. ASCII-escaped non-Latin. Count escapes that denote CJK code points and
+    # treat them as if they were the character itself, so the escaped and the
+    # unescaped forms of the same document classify the same way.
+    escaped = _escaped_non_latin_ratio(text)
+    if escaped is not None and escaped > 0.5:
+        return True
+
+    # 1 + 2. Sample windows across the WHOLE text, not just the head.
+    n_windows = 5
+    if len(text) <= sample:
+        windows = [text]
+    else:
+        step = max(1, (len(text) - sample) // (n_windows - 1)) if n_windows > 1 else len(text)
+        windows = [text[i * step: i * step + sample] for i in range(n_windows)]
+        windows = [w for w in windows if w]
+
+    densest = 0.0
+    for w in windows:
+        letters = [c for c in w if c.isalpha()]
+        if not letters:
+            continue
+        latin = sum(1 for c in letters if ord(c) < 0x0250)
+        densest = max(densest, 1.0 - (latin / len(letters)))
+    return densest > 0.5
+
+
+#: CJK and related ranges that Laya tokenizes near one-token-per-character.
+_ESCAPE_RANGES = (
+    (0x2E80, 0x303F),      # CJK radicals, Kangxi, CJK symbols and punctuation
+    (0x3040, 0x30FF),      # Hiragana, Katakana
+    (0x3400, 0x4DBF),      # CJK Unified Ideographs Extension A
+    (0x4E00, 0x9FFF),      # CJK Unified Ideographs
+    (0xAC00, 0xD7AF),      # Hangul syllables
+    (0xF900, 0xFAFF),      # CJK compatibility ideographs
+    (0xFF00, 0xFFEF),      # Halfwidth and fullwidth forms
+    (0x20000, 0x2FA1F),    # CJK extensions B-F
+)
+
+
+def _escaped_non_latin_ratio(text: str) -> Optional[float]:
+    """Fraction of ``\\uXXXX`` escapes in the sample that denote CJK.
+
+    ``None`` when there are too few escapes to judge. Only escapes are considered,
+    so ordinary JSON full of ASCII keys is unaffected.
+    """
+    import re as _re
+
+    head = text[:8000]
+    escapes = _re.findall(r"\\u([0-9a-fA-F]{4})", head)
+    if len(escapes) < 20:
+        return None
+    cjk = 0
+    for h in escapes:
+        cp = int(h, 16)
+        if any(lo <= cp <= hi for lo, hi in _ESCAPE_RANGES):
+            cjk += 1
+    return cjk / len(escapes)
 
 
 def _render_options_length(question: Question) -> int:

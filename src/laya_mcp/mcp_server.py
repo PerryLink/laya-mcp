@@ -203,39 +203,53 @@ class Backend:
 
         validate_questions(questions)
         if self.sidecar:
-            # The sidecar owns the loaded checkpoint, so ask it for the
-            # capability rather than guessing from a config file this process
-            # may not even have.
-            info = _get_json(f"{self.sidecar}/capabilities")
-            checkpoints = info.get("checkpoints") or {}
-            if not checkpoints:
-                raise InvalidQuestionError("the sidecar reports no loaded checkpoint")
-            name, raw = next(iter(checkpoints.items()))
-            from .capability import Capability
-
-            capability = Capability(
-                checkpoint=name,
-                repo=raw.get("repo", "?"),
-                subfolder=raw.get("subfolder"),
-                encoder=raw.get("encoder"),
-                device=raw.get("device", "unknown"),
-                requested_device=raw.get("requested_device"),
-                degraded=bool(raw.get("degraded", False)),
-                max_len=int(raw.get("max_len", 512)),
-                head_max_len=int(raw.get("head_max_len", 192)),
-                head_layers=raw.get("head_layers"),
-                temperature=tuple(raw.get("temperature") or (1.0, 1.0, 1.0)),
-                fitted_temperature_buckets=int(raw.get("fitted_temperature_buckets", 0)),
-                amp_dtype=raw.get("amp_dtype"),
-            )
-            plan = plan_questions(capability, state, questions)
-            return plan.to_dict()
+            # The sidecar owns the loaded checkpoint AND the tokenizer, so ask it
+            # to plan rather than reconstructing its capability here.
+            #
+            # WHY this replaced a local recomputation: the client-side version had
+            # no tokenizer (the model lives in the other process), so it could only
+            # fall back to the character estimate that under-reserves on JSON, code
+            # and CJK -- while `/plan` runs server-side where the real tokenizer is
+            # in hand. Two paths that can disagree about the same question is also
+            # the defect shape this project keeps finding; now there is one.
+            payload = {
+                "state": state,
+                "questions": {
+                    qid: _question_payload(q) for qid, q in questions.items()
+                },
+            }
+            body = _post_json(f"{self.sidecar}/plan", payload)
+            if not body.get("ok", True):
+                raise InvalidQuestionError(
+                    str(body.get("message") or "the sidecar rejected the plan request")
+                )
+            return {k: v for k, v in body.items() if k != "ok"}
         worker = self._local()
         worker.start()
         capability = next(iter(worker.capabilities.values()), None)
         if capability is None:
             raise InvalidQuestionError("no checkpoint is loaded")
-        return plan_questions(capability, state, questions).to_dict()
+        # The local worker holds the loaded agent, so it can supply a real
+        # tokenizer here too -- see Worker._tokenizer_for.
+        names = list(worker.capabilities)
+        return plan_questions(
+            capability, state, questions,
+            tokenizer=worker._tokenizer_for(names[0]) if names else None,
+        ).to_dict()
+
+
+def _question_payload(question: Question) -> dict[str, Any]:
+    """A :class:`Question` as the JSON body `/plan` and `/ask` accept.
+
+    Mirrors what ``server.build_request`` reads back in (`type`, `instructions`,
+    `criteria`; the id comes from the mapping key), so the client-side request and
+    the server-side parse cannot drift into two shapes.
+    """
+    return {
+        "type": question.type,
+        "instructions": question.instructions,
+        "criteria": question.criteria,
+    }
 
 
 def _post_json(url: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -266,23 +280,12 @@ def _post_json(url: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         ) from exc
 
 
-def _get_json(url: str) -> Mapping[str, Any]:
-    import urllib.error
-    import urllib.request
-
-    try:
-        with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.URLError as exc:
-        raise SidecarUnreachableError(
-            f"cannot reach the sidecar at {url}: {exc.reason}",
-            hint="start it with `laya-mcp serve`, or run without --sidecar to host the model here",
-        ) from exc
-    except Exception as exc:  # noqa: BLE001
-        # Up, but not answering with JSON. That is a different fault from "not
-        # there", and saying "unreachable" for it would send the caller to check
-        # a process that is running perfectly well.
-        raise LayaMcpError(f"the sidecar at {url} returned an unusable response: {exc}") from exc
+# `_get_json` was removed alongside the client-side plan recomputation: its only
+# caller fetched `/capabilities` so this process could rebuild the sidecar's
+# capability and estimate the budget locally. Planning now goes to the sidecar's
+# `/plan`, which holds the real tokenizer, so nothing reads `/capabilities` any
+# more. Kept as a note rather than deleted silently, because a helper that
+# disappears without explanation is how a reader concludes it was never used.
 
 
 # --------------------------------------------------------------------------- #
