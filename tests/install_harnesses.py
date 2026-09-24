@@ -45,6 +45,7 @@ def main() -> int:
         HARNESSES,
         _write_claude,
         _write_codex,
+        _write_cursor,
         _write_hermes,
         _write_openclaw,
         _write_opencode,
@@ -94,6 +95,20 @@ def main() -> int:
         check("declares type: stdio", block.get("type") == "stdio")
         check("does NOT emit alwaysAllow (not a real Claude MCP key)",
               "alwaysAllow" not in block)
+
+        print("\ncursor  (~/.cursor/mcp.json, key `mcpServers`, no `type`)")
+        cur = root_path / "cursor" / "mcp.json"
+        cur.parent.mkdir(parents=True)
+        cur.write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}}), encoding="utf-8")
+        _write_cursor(cur, entry)
+        data = json.loads(cur.read_text(encoding="utf-8"))
+        check("entry is under `mcpServers`", "mcpServers" in data and "laya" in data["mcpServers"])
+        check("pre-existing server survives", "other" in data["mcpServers"])
+        block = data["mcpServers"]["laya"]
+        check("command matches", block.get("command") == sys.executable)
+        check("args is a list", isinstance(block.get("args"), list))
+        check("does NOT emit `type` (not a Cursor mcp.json key)",
+              "type" not in block)
 
         print("\ncodex  (~/.codex/config.toml, table `[mcp_servers.<name>]`)")
         codex = root_path / "codex" / "config.toml"
@@ -179,8 +194,8 @@ def main() -> int:
                   broken.read_text(encoding="utf-8") == "{ this is not json")
 
     print("\nharness registry")
-    check("all five requested harnesses are known",
-          {"claude", "codex", "opencode", "openclaw", "hermes"} <= {h.id for h in HARNESSES})
+    check("all six requested harnesses are known",
+          {"claude", "cursor", "codex", "opencode", "openclaw", "hermes"} <= {h.id for h in HARNESSES})
     pi = next((h for h in HARNESSES if h.id == "pi"), None)
     check("pi is present and marked unsupported", pi is not None and pi.unsupported_reason is not None)
     if pi and pi.unsupported_reason:
