@@ -26,6 +26,8 @@ Python-backed MCP server is annoying to install:
 ``install``
     Write this server into the config of whichever agent harness is present. Each
     harness uses a different file, format and key; see :mod:`laya_mcp.harnesses`.
+    With ``--with-skill`` it also writes ``SKILL.md`` into each harness's skill
+    directory; ``--skill-only`` writes just the skill.
 
 Every subcommand keeps stdout clean for its own protocol and sends diagnostics to
 stderr, because a stdio MCP server that prints a banner to stdout is a server
@@ -208,6 +210,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     install.add_argument("--dry-run", action="store_true", help="print the change, write nothing")
     install.add_argument("--project", default=None, help="write into a project-local config too")
+    install.add_argument(
+        "--with-skill", action="store_true",
+        help="also write SKILL.md into each targeted harness's skill directory",
+    )
+    install.add_argument(
+        "--skill-only", action="store_true",
+        help="only write SKILL.md; skip the MCP server registration",
+    )
+    install.add_argument(
+        "--skill-name", default="laya",
+        help="the skill folder name to write (default: laya; must match the frontmatter `name`)",
+    )
+    install.add_argument(
+        "--skill-source", default=None,
+        help="read SKILL.md from this file instead of the packaged copy",
+    )
 
     return parser
 
@@ -392,6 +410,10 @@ def _cmd_install(args: argparse.Namespace) -> int:
         python=args.python or sys.executable,
         dry_run=args.dry_run,
         project=args.project,
+        with_skill=args.with_skill,
+        skill_only=args.skill_only,
+        skill_name=args.skill_name,
+        skill_source=args.skill_source,
     )
 
 

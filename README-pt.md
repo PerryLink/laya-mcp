@@ -50,13 +50,14 @@ Por isso este pacote acrescenta o que falta: um **preflight** que diz o que seri
 
 ---
 
-## Um instalador, cinco harnesses
+## Um instalador, seis harnesses
 
 Não há forma portátil de registar um servidor MCP. Medidos contra harnesses reais instalados, discordam no ficheiro, no formato e na chave:
 
 | harness | configuração | formato | chave |
 |---|---|---|---|
 | Claude Code | `~/.claude.json` | JSON | `mcpServers` |
+| Cursor | `~/.cursor/mcp.json` | JSON | `mcpServers` |
 | Codex | `~/.codex/config.toml` | TOML | `[mcp_servers.<name>]` |
 | opencode | `~/.config/opencode/opencode.json[c]` | JSON | `mcp` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON | `mcp.servers` |
@@ -70,6 +71,32 @@ Duas limitações honestas:
 * **O `pi` não é suportado.** Não é um descuido: o `pi` não tem suporte MCP nativo. A sua referência de definições não contém nenhuma chave MCP, e o seu próprio pedido a montante sobre MCP intitula-se *«Add MCP extension example»* — no `pi`, MCP é uma extensão que construis. Não há ficheiro de configuração que um instalador possa escrever. O `install` deteta-o e di-lo.
 
 O `install` aponta o harness para `python -m laya_mcp mcp` em vez do script de consola `laya-mcp`, deliberadamente: no Windows um script de consola é um shim `.cmd` e o SDK de MCP lança processos com `shell: false`, que não o consegue executar.
+
+### Skills
+
+Registar o servidor é só metade da instalação. Sem a skill, o harness vê cinco ferramentas com descrições de um parágrafo e nenhuma das regras que decidem se uma resposta significa alguma coisa:
+
+```bash
+laya-mcp install --with-skill   # registo MCP + SKILL.md para cada harness encontrado
+laya-mcp install --skill-only   # só o SKILL.md, sem registo do servidor
+laya-mcp install --with-skill --harness cursor,claude  # só estes dois
+laya-mcp install --skill-only --dry-run  # mostra os caminhos, não escreve nada
+```
+
+Todos os harnesses convergem em `<skills>/<nome>/SKILL.md`; só a raiz difere:
+
+| harness | ficheiro da skill |
+|---|---|
+| Claude Code | `~/.claude/skills/laya/SKILL.md` |
+| Cursor | `~/.cursor/skills/laya/SKILL.md` |
+| Codex | `$CODEX_HOME/skills/laya/SKILL.md`, senão `~/.codex/skills/laya/SKILL.md` |
+| opencode | `~/.config/opencode/skills/laya/SKILL.md` (`XDG_CONFIG_HOME` tem prioridade) |
+| OpenClaw | `~/.openclaw/skills/laya/SKILL.md` |
+| Hermes | `~/.hermes/skills/laya/SKILL.md` (`HERMES_HOME` senão o omisso da plataforma, como na configuração) |
+
+Aplica-se o mesmo contrato de fusão/cópia de segurança do escritor de configuração, e voltar a correr é um no-op reportado como `unchanged` em vez de uma nova cópia de segurança. O texto instalado é o `SKILL.md` da raiz do repositório, incluído no wheel para que um `pip install` o consiga ler sem checkout; `--skill-source FICHEIRO` sobrepõe-no e `--skill-name NOME` renomeia a pasta (tem de coincidir com o `name` do frontmatter).
+
+Com `--project DIR`, as skills de âmbito de projeto vão para `DIR/.agents/skills/laya/`, `DIR/.claude/skills/laya/` e `DIR/.cursor/skills/laya/` — uma escrita por forma nativa, porque `.agents/skills` é o diretório neutro que Cursor, Codex, opencode e OpenClaw lêem, enquanto Claude e Cursor preferem a sua própria raiz. O Hermes não tem âmbito de skill por projeto, por isso a instalação global acima é toda a história aí. O Cursor precisa de sair e reabrir por completo antes de uma skill nova aparecer; o Claude Code apanha-a em direto.
 
 ---
 

@@ -50,13 +50,14 @@ Laya चुपचाप चीज़ें काट देता है, और
 
 ---
 
-## एक इंस्टॉलर, पाँच harness
+## एक इंस्टॉलर, छह harness
 
 MCP सर्वर पंजीकृत करने का कोई पोर्टेबल तरीक़ा नहीं है। वास्तव में स्थापित harnesses के विरुद्ध मापने पर वे फ़ाइल, प्रारूप और कुंजी — तीनों में अलग हैं:
 
 | harness | कॉन्फ़िग | प्रारूप | कुंजी |
 |---|---|---|---|
 | Claude Code | `~/.claude.json` | JSON | `mcpServers` |
+| Cursor | `~/.cursor/mcp.json` | JSON | `mcpServers` |
 | Codex | `~/.codex/config.toml` | TOML | `[mcp_servers.<name>]` |
 | opencode | `~/.config/opencode/opencode.json[c]` | JSON | `mcp` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON | `mcp.servers` |
@@ -70,6 +71,32 @@ MCP सर्वर पंजीकृत करने का कोई पो�
 * **`pi` समर्थित नहीं है।** यह चूक नहीं है: `pi` में मूल MCP समर्थन नहीं है। उसके settings संदर्भ में कोई MCP कुंजी नहीं है, और MCP के लिए उसका अपना अपस्ट्रीम अनुरोध *«Add MCP extension example»* शीर्षक से है — `pi` में MCP वह extension है जो आप स्वयं बनाते हैं। ऐसी कोई कॉन्फ़िग फ़ाइल नहीं जिसे इंस्टॉलर लिख सके। `install` इसे पहचानता है और बता देता है।
 
 `install` harness को `laya-mcp` कंसोल स्क्रिप्ट के बजाय जानबूझकर `python -m laya_mcp mcp` की ओर इंगित करता है: Windows पर कंसोल स्क्रिप्ट एक `.cmd` शिम होती है और MCP SDK `shell: false` के साथ प्रक्रिया बनाता है, जो उसे चला नहीं सकता।
+
+### Skills
+
+केवल सर्वर पंजीकृत करना आधी स्थापना है। skill के बिना harness को एक-पंक्ति विवरण वाले पाँच उपकरण दिखते हैं, पर वे नियम नहीं दिखते जो तय करते हैं कि उत्तर का कोई अर्थ है या नहीं:
+
+```bash
+laya-mcp install --with-skill   # मिले हर harness के लिए MCP पंजीकरण + SKILL.md
+laya-mcp install --skill-only   # केवल SKILL.md, सर्वर पंजीकरण नहीं
+laya-mcp install --with-skill --harness cursor,claude  # केवल ये दो
+laya-mcp install --skill-only --dry-run  # केवल पथ दिखाएँ, कुछ न लिखें
+```
+
+सभी harness `<skills>/<name>/SKILL.md` पर मिलते हैं; केवल मूल (root) अलग है:
+
+| harness | skill फ़ाइल |
+|---|---|
+| Claude Code | `~/.claude/skills/laya/SKILL.md` |
+| Cursor | `~/.cursor/skills/laya/SKILL.md` |
+| Codex | `$CODEX_HOME/skills/laya/SKILL.md`, वरना `~/.codex/skills/laya/SKILL.md` |
+| opencode | `~/.config/opencode/skills/laya/SKILL.md` (`XDG_CONFIG_HOME` को प्राथमिकता) |
+| OpenClaw | `~/.openclaw/skills/laya/SKILL.md` |
+| Hermes | `~/.hermes/skills/laya/SKILL.md` (`HERMES_HOME` वरना प्लेटफ़ॉर्म डिफ़ॉल्ट, कॉन्फ़िग जैसा ही) |
+
+वही मर्ज/बैकअप अनुबंध लागू होता है जो कॉन्फ़िग लेखक पर लागू होता है, और दोबारा चलाना हर बार नया बैकअप बनाने के बजाय `unchanged` के रूप में रिपोर्ट होने वाला no-op है। स्थापित पाठ भंडार-मूल (repository root) का `SKILL.md` है, जो wheel में भी शामिल है ताकि `pip install` बिना checkout के उसे पढ़ सके; `--skill-source FILE` उसे बदल देता है और `--skill-name NAME` फ़ोल्डर का नाम बदलता है (यह frontmatter के `name` से मेल खाना चाहिए)।
+
+`--project DIR` के साथ, प्रोजेक्ट-स्तरीय skills `DIR/.agents/skills/laya/`, `DIR/.claude/skills/laya/` और `DIR/.cursor/skills/laya/` में लिखी जाती हैं — हर मूल आकार के लिए एक लेखन, क्योंकि `.agents/skills` वह तटस्थ निर्देशिका है जिसे Cursor, Codex, opencode और OpenClaw सभी पढ़ते हैं, जबकि Claude और Cursor अपनी मूल निर्देशिका पसंद करते हैं। Hermes का कोई प्रोजेक्ट skill दायरा नहीं है, इसलिए ऊपर की वैश्विक स्थापना ही उसकी पूरी कहानी है। नई skill दिखने से पहले Cursor को पूरी तरह बंद करके फिर खोलना पड़ता है; Claude Code उसे तुरंत पकड़ लेता है।
 
 ---
 

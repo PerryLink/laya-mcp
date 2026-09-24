@@ -111,6 +111,44 @@ Two honest limitations:
 `laya-mcp` console script, deliberately: on Windows a console script is a `.cmd`
 shim and the MCP SDK spawns with `shell: false`, which cannot execute it.
 
+### Skills
+
+Registering the server is only half the install. Without the skill, the harness
+sees five tools with one-paragraph descriptions and none of the rules that decide
+whether an answer means anything:
+
+```bash
+laya-mcp install --with-skill   # MCP registration + SKILL.md for every harness found
+laya-mcp install --skill-only   # just the SKILL.md, no server registration
+laya-mcp install --with-skill --harness cursor,claude  # only these two
+laya-mcp install --skill-only --dry-run  # print the paths, write nothing
+```
+
+Every harness converges on `<skills>/<name>/SKILL.md`; only the root differs:
+
+| harness | skill file |
+|---|---|
+| Claude Code | `~/.claude/skills/laya/SKILL.md` |
+| Cursor | `~/.cursor/skills/laya/SKILL.md` |
+| Codex | `$CODEX_HOME/skills/laya/SKILL.md`, else `~/.codex/skills/laya/SKILL.md` |
+| opencode | `~/.config/opencode/skills/laya/SKILL.md` (`XDG_CONFIG_HOME` wins) |
+| OpenClaw | `~/.openclaw/skills/laya/SKILL.md` |
+| Hermes | `~/.hermes/skills/laya/SKILL.md` (`HERMES_HOME` else platform default, like its config) |
+
+The same merge/backup contract as the config writer applies, and re-running is a
+no-op reported as `unchanged` rather than a fresh backup every time. The text
+installed is the `SKILL.md` at the repository root, vendored into the wheel so a
+`pip install` can read it without a checkout; `--skill-source FILE` overrides it
+and `--skill-name NAME` renames the folder (it must match the frontmatter `name`).
+
+With `--project DIR`, project-scoped skills land in `DIR/.agents/skills/laya/`,
+`DIR/.claude/skills/laya/` and `DIR/.cursor/skills/laya/` — one write per native
+shape, because `.agents/skills` is the neutral directory Cursor, Codex, opencode
+and OpenClaw all read, while Claude and Cursor prefer their own root. Hermes has
+no project skill scope, so the global install above is the whole story there.
+Cursor needs a full quit-and-reopen before a new skill appears; Claude Code picks
+it up live.
+
 ---
 
 ## Tools
