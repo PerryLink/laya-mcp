@@ -45,6 +45,7 @@ def main() -> int:
         HARNESSES,
         _write_claude,
         _write_codex,
+        _write_cursor,
         _write_hermes,
         _write_openclaw,
         _write_opencode,
@@ -94,6 +95,20 @@ def main() -> int:
         check("declares type: stdio", block.get("type") == "stdio")
         check("does NOT emit alwaysAllow (not a real Claude MCP key)",
               "alwaysAllow" not in block)
+
+        print("\ncursor  (~/.cursor/mcp.json, key `mcpServers`, no `type`)")
+        cur = root_path / "cursor" / "mcp.json"
+        cur.parent.mkdir(parents=True)
+        cur.write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}}), encoding="utf-8")
+        _write_cursor(cur, entry)
+        data = json.loads(cur.read_text(encoding="utf-8"))
+        check("entry is under `mcpServers`", "mcpServers" in data and "laya" in data["mcpServers"])
+        check("pre-existing server survives", "other" in data["mcpServers"])
+        block = data["mcpServers"]["laya"]
+        check("command matches", block.get("command") == sys.executable)
+        check("args is a list", isinstance(block.get("args"), list))
+        check("does NOT emit `type` (not a Cursor mcp.json key)",
+              "type" not in block)
 
         print("\ncodex  (~/.codex/config.toml, table `[mcp_servers.<name>]`)")
         codex = root_path / "codex" / "config.toml"
@@ -179,8 +194,8 @@ def main() -> int:
                   broken.read_text(encoding="utf-8") == "{ this is not json")
 
     print("\nharness registry")
-    check("all five requested harnesses are known",
-          {"claude", "codex", "opencode", "openclaw", "hermes"} <= {h.id for h in HARNESSES})
+    check("all six requested harnesses are known",
+          {"claude", "cursor", "codex", "opencode", "openclaw", "hermes"} <= {h.id for h in HARNESSES})
     pi = next((h for h in HARNESSES if h.id == "pi"), None)
     check("pi is present and marked unsupported", pi is not None and pi.unsupported_reason is not None)
     if pi and pi.unsupported_reason:
@@ -227,9 +242,137 @@ def main() -> int:
         for name in FAILURES:
             print(f"  - {name}")
         return 1
-    print(f"all {CHECKS} checks passed")
+    print(f"all {CHECKS} checks passed (part 1: configs)")
+    return 0
+
+
+def main_skills() -> int:
+    """Part 2: the skill installer. Same temp-dir discipline as part 1."""
+    from laya_mcp.harnesses import (
+        HARNESSES,
+        _codex_skill_path,
+        _cursor_skill_path,
+        _hermes_skill_path,
+        _opencode_skill_path,
+        install,
+        install_skill_file,
+        load_skill_source,
+    )
+
+    print("\nskill source: the packaged copy matches the repository root")
+    repo_root = Path(__file__).resolve().parents[1] / "SKILL.md"
+    vendored = Path(__file__).resolve().parents[1] / "src" / "laya_mcp" / "SKILL.md"
+    check("repository SKILL.md exists", repo_root.is_file(), str(repo_root))
+    check("vendored SKILL.md exists", vendored.is_file(), str(vendored))
+    if repo_root.is_file() and vendored.is_file():
+        check("vendored copy is identical to the repository copy (no drift)",
+              vendored.read_text(encoding="utf-8") == repo_root.read_text(encoding="utf-8"))
+    check("load_skill_source() finds one without arguments",
+          isinstance(load_skill_source(), str) and len(load_skill_source()) > 0)
+
+    with tempfile.TemporaryDirectory(prefix="laya-mcp-skill-src-") as root:
+        custom = Path(root) / "custom.md"
+        custom.write_text("---\nname: laya\n---\nbody\n", encoding="utf-8")
+        check("an explicit --skill-source wins",
+              load_skill_source(str(custom)) == "---\nname: laya\n---\nbody\n")
+        try:
+            load_skill_source(str(Path(root) / "missing.md"))
+            check("a missing --skill-source is an error", False, "it read nothing")
+        except ValueError as exc:
+            check("a missing --skill-source is an error", "does not exist" in str(exc))
+
+    print("\nevery supported harness has a skill path; pi has none")
+    for target in HARNESSES:
+        if target.unsupported_reason is not None:
+            check(f"{target.id} (unsupported) has no skill path", target.skill_path is None)
+        else:
+            check(f"{target.id} has a skill path", target.skill_path is not None)
+            check(f"{target.id} documents its skill location",
+                  isinstance(target.skill_location, str) and "SKILL.md" in target.skill_location)
+
+    print("\nskill paths honour their relocations")
+    saved = {key: os.environ.get(key) for key in ("CODEX_HOME", "HERMES_HOME", "XDG_CONFIG_HOME")}
+    try:
+        probe = Path(tempfile.gettempdir()) / "laya-skill-probe"
+        os.environ["CODEX_HOME"] = str(probe / "codex-home")
+        check("CODEX_HOME relocates codex skills",
+              _codex_skill_path("laya") == probe / "codex-home" / "skills" / "laya" / "SKILL.md",
+              str(_codex_skill_path("laya")))
+        os.environ.pop("CODEX_HOME", None)
+        check("codex falls back to ~/.codex/skills",
+              _codex_skill_path("laya") == Path(os.path.expanduser("~")) / ".codex" / "skills" / "laya" / "SKILL.md")
+
+        os.environ["HERMES_HOME"] = str(probe / "hermes-home")
+        check("HERMES_HOME relocates hermes skills",
+              _hermes_skill_path("laya") == probe / "hermes-home" / "skills" / "laya" / "SKILL.md")
+        os.environ.pop("HERMES_HOME", None)
+
+        os.environ["XDG_CONFIG_HOME"] = str(probe / "xdg")
+        check("XDG_CONFIG_HOME relocates opencode skills",
+              _opencode_skill_path("laya") == probe / "xdg" / "opencode" / "skills" / "laya" / "SKILL.md")
+        os.environ.pop("XDG_CONFIG_HOME", None)
+
+        check("cursor skills live under ~/.cursor/skills",
+              _cursor_skill_path("laya") == Path(os.path.expanduser("~")) / ".cursor" / "skills" / "laya" / "SKILL.md")
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    print("\nskill writes: atomic, backed up, idempotent")
+    with tempfile.TemporaryDirectory(prefix="laya-mcp-skill-") as root:
+        target = Path(root) / "skills" / "laya" / "SKILL.md"
+        check("dry run writes nothing",
+              install_skill_file(target, "hello", dry_run=True) == "written"
+              and not target.is_file())
+        check("first write reports written",
+              install_skill_file(target, "hello") == "written" and target.is_file())
+        check("identical content reports unchanged",
+              install_skill_file(target, "hello") == "unchanged")
+        check("changed content reports written and backs up",
+              install_skill_file(target, "hello v2") == "written"
+              and target.read_text(encoding="utf-8") == "hello v2"
+              and target.with_suffix(target.suffix + ".tmp").exists() is False)
+
+    print("\ninstall --skill-only end to end, in a fake HOME")
+    real_home = os.environ.get("HOME")
+    fake_home = tempfile.mkdtemp(prefix="laya-mcp-fakehome-")
+    try:
+        os.environ["HOME"] = fake_home
+        # A cursor config that already exists marks the harness present even
+        # with no `cursor` binary on PATH - the same rule as the real detector.
+        cursor_config = Path(fake_home) / ".cursor" / "mcp.json"
+        cursor_config.parent.mkdir(parents=True, exist_ok=True)
+        cursor_config.write_text('{"mcpServers": {}}', encoding="utf-8")
+        code = install(harness="cursor", skill_only=True, skill_name="laya")
+        expected = Path(fake_home) / ".cursor" / "skills" / "laya" / "SKILL.md"
+        check("skill-only install exits 0", code == 0, f"exit {code}")
+        check("cursor skill lands in the fake HOME", expected.is_file())
+        check("no MCP config was touched beyond the pre-existing one",
+              cursor_config.read_text(encoding="utf-8") == '{"mcpServers": {}}')
+        code = install(harness="cursor", skill_only=True, skill_name="laya")
+        check("re-running is clean (exit 0, content unchanged)", code == 0)
+    finally:
+        if real_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = real_home
+        shutil.rmtree(fake_home, ignore_errors=True)
+
+    print()
+    if FAILURES:
+        print(f"{len(FAILURES)}/{CHECKS} checks FAILED:")
+        for name in FAILURES:
+            print(f"  - {name}")
+        return 1
+    print(f"all {CHECKS} checks passed (parts 1+2)")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    part1 = main()
+    if part1 != 0:
+        raise SystemExit(part1)
+    raise SystemExit(main_skills())

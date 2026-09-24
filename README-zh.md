@@ -50,13 +50,14 @@ Laya 会静默地截断东西，而这些省略恰恰是你在依据错误答案
 
 ---
 
-## 一个安装器，五个 harness
+## 一个安装器，六个 harness
 
 注册 MCP server 没有可移植的做法。对着真实安装的 harness 实测，它们在文件、格式和键名上都不一样：
 
 | harness | 配置 | 格式 | 键 |
 |---|---|---|---|
 | Claude Code | `~/.claude.json` | JSON | `mcpServers` |
+| Cursor | `~/.cursor/mcp.json` | JSON | `mcpServers` |
 | Codex | `~/.codex/config.toml` | TOML | `[mcp_servers.<name>]` |
 | opencode | `~/.config/opencode/opencode.json[c]` | JSON | `mcp` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON | `mcp.servers` |
@@ -70,6 +71,32 @@ Laya 会静默地截断东西，而这些省略恰恰是你在依据错误答案
 * **不支持 `pi`。** 这不是疏忽：`pi` 没有原生 MCP 支持。它的设置文档里没有任何 MCP 键，它上游关于 MCP 的请求标题是*「Add MCP extension example」*——在 `pi` 里，MCP 是要你自己构建的扩展。没有配置文件可供安装器写入。`install` 会检测到并说明。
 
 `install` 让 harness 指向 `python -m laya_mcp mcp` 而不是 `laya-mcp` 控制台脚本，这是有意的：在 Windows 上控制台脚本是一个 `.cmd` 垫片，而 MCP SDK 以 `shell: false` 生成进程，无法执行它。
+
+### Skills
+
+只注册 server 是安装的一半。没有 skill，harness 只能看到五个一句话描述的工具，却看不到决定答案是否有意义的那些规则：
+
+```bash
+laya-mcp install --with-skill   # 为每个找到的 harness 注册 MCP + 写 SKILL.md
+laya-mcp install --skill-only   # 只写 SKILL.md，不注册 server
+laya-mcp install --with-skill --harness cursor,claude  # 只装这两个
+laya-mcp install --skill-only --dry-run  # 只打印路径，不写任何东西
+```
+
+所有 harness 都收敛到 `<skills>/<name>/SKILL.md`，区别只在根目录：
+
+| harness | skill 文件 |
+|---|---|
+| Claude Code | `~/.claude/skills/laya/SKILL.md` |
+| Cursor | `~/.cursor/skills/laya/SKILL.md` |
+| Codex | `$CODEX_HOME/skills/laya/SKILL.md`，否则 `~/.codex/skills/laya/SKILL.md` |
+| opencode | `~/.config/opencode/skills/laya/SKILL.md`（`XDG_CONFIG_HOME` 优先） |
+| OpenClaw | `~/.openclaw/skills/laya/SKILL.md` |
+| Hermes | `~/.hermes/skills/laya/SKILL.md`（`HERMES_HOME`，否则按平台默认，和它的配置一样） |
+
+沿用配置写入器同样的合并/备份约定；重复运行是报告为 `unchanged` 的无操作，而不是每次都产生新备份。安装的文本是仓库根目录的 `SKILL.md`，它也被打进 wheel，因此 `pip install` 无需 checkout 即可读取；`--skill-source FILE` 可覆盖，`--skill-name NAME` 可重命名目录（必须与 frontmatter 的 `name` 一致）。
+
+带 `--project DIR` 时，项目级 skill 会同时写入 `DIR/.agents/skills/laya/`、`DIR/.claude/skills/laya/` 和 `DIR/.cursor/skills/laya/`——每种原生形状写一份，因为 `.agents/skills` 是 Cursor、Codex、opencode 和 OpenClaw 都读的中性目录，而 Claude 和 Cursor 更偏好自己的根目录。Hermes 没有项目级 skill 作用域，所以上面的全局安装就是它的全部。Cursor 需要完全退出重开，新 skill 才会出现；Claude Code 则实时生效。
 
 ---
 

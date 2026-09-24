@@ -7,6 +7,7 @@ they disagree on everything:
 harness      config file                                 format     the key
 ===========  ==========================================  =========  ==========================
 Claude Code  ``~/.claude.json`` (or a project ``.mcp.json``)  JSON   ``mcpServers``
+Cursor       ``~/.cursor/mcp.json``                           JSON   ``mcpServers``
 Codex        ``~/.codex/config.toml``                     TOML       ``[mcp_servers.<name>]``
 opencode     ``~/.config/opencode/opencode.json[c]``      JSON       ``mcp``
 OpenClaw     ``~/.openclaw/openclaw.json``                JSON       ``mcp.servers``
@@ -37,6 +38,14 @@ and refuses to touch a file it cannot parse. A harness config holds the user's
 other state - ``~/.claude.json`` in particular is a large shared file with history
 and per-project data - and clobbering it to install a decision model would be a
 catastrophic trade.
+
+Registering the server is only half the install. Without the skill, the harness
+sees five tools with one-paragraph descriptions and none of the rules that decide
+whether an answer means anything (a ``noul`` needs its ``boundary``, ``confidence``
+is not accuracy, an oversized state is cut from the end). So ``install
+--with-skill`` also writes ``SKILL.md`` into each harness's own skill directory -
+same merge/backup contract, and rewriting identical content is reported as
+unchanged rather than as a change.
 """
 
 from __future__ import annotations
@@ -110,6 +119,11 @@ class Harness:
     verify: Optional[Sequence[str]] = None
     #: An executable whose presence on PATH means the harness is installed.
     detect: Sequence[str] = ()
+    #: Where this harness reads its ``SKILL.md`` from for a skill called ``name``.
+    #: ``None`` means the harness has no skill surface this installer can write.
+    skill_path: Optional[Callable[[str], Optional[Path]]] = None
+    #: Human-readable description of the skill location, for the report.
+    skill_location: Optional[str] = None
     #: A reason this harness cannot be configured by writing a file.
     unsupported_reason: Optional[str] = None
 
@@ -216,7 +230,7 @@ def _toml_string(value: str) -> str:
     """A TOML basic string.
 
     Written by hand rather than with a library: the standard library can *read*
-    TOML but not write it, and adding a writer dependency to configure five
+    TOML but not write it, and adding a writer dependency to configure six
     harnesses is not a trade worth making. Escaping the two characters that
     actually appear in a Windows path plus the quote itself covers the real input.
     """
@@ -365,6 +379,29 @@ def _write_claude(path: Path, entry: Entry) -> None:
     _write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
+def _write_cursor(path: Path, entry: Entry) -> None:
+    """Cursor: top-level ``mcpServers`` in ``~/.cursor/mcp.json``.
+
+    Same key as Claude Code, deliberately *without* ``type``: Cursor's own
+    ``mcp.json`` docs show entries as ``{command, args, env}`` (plus ``url`` /
+    ``headers`` for remote servers) and no ``type`` field. Emitting one would
+    look reasonable and do nothing, the same trap ``alwaysAllow`` was for Claude.
+    A project-local ``.cursor/mcp.json`` shares the shape; only the path differs,
+    and the project file wins over the global one with no merging.
+    """
+    data = _read_json(path)
+    servers = data.setdefault("mcpServers", {})
+    if not isinstance(servers, dict):
+        raise ValueError(f"{path}: `mcpServers` exists but is not an object")
+    block: dict[str, Any] = {"command": entry.command}
+    if entry.args:
+        block["args"] = list(entry.args)
+    if entry.env:
+        block["env"] = dict(entry.env)
+    servers[entry.name] = block
+    _write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+
 def _write_opencode(path: Path, entry: Entry) -> None:
     """opencode: ``mcp``, and three ways it differs from everyone else.
 
@@ -411,6 +448,67 @@ def _write_project_json(path: Path, entry: Entry) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# skills
+# --------------------------------------------------------------------------- #
+
+#: The skill name written when the caller does not rename it. Matches the
+#: frontmatter ``name`` in ``SKILL.md``, which is what every harness keys on.
+DEFAULT_SKILL_NAME = "laya"
+
+
+def load_skill_source(skill_source: Optional[str] = None) -> str:
+    """Read the ``SKILL.md`` text to install.
+
+    An explicit ``--skill-source`` path wins. Otherwise the vendored copy inside
+    the package is used (it ships in the wheel via ``package-data``), falling
+    back to the repository-root ``SKILL.md`` for source checkouts where the
+    package is imported without being installed.
+    """
+    if skill_source:
+        candidate = Path(skill_source).expanduser()
+        if not candidate.is_file():
+            raise ValueError(
+                f"skill source {candidate} does not exist; pass a file holding SKILL.md content"
+            )
+        return candidate.read_text(encoding="utf-8")
+    try:
+        from importlib.resources import files as _resource_files
+
+        vendored = _resource_files("laya_mcp").joinpath("SKILL.md")
+        if vendored.is_file():
+            return vendored.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001 - fall through to the checkout fallback
+        pass
+    checkout = Path(__file__).resolve().parents[2] / "SKILL.md"
+    if checkout.is_file():
+        return checkout.read_text(encoding="utf-8")
+    raise ValueError(
+        "no SKILL.md found inside the installed package nor at the repository root; "
+        "pass --skill-source with a path to one"
+    )
+
+
+def install_skill_file(path: Path, content: str, *, dry_run: bool = False) -> str:
+    """Write ``content`` to a ``SKILL.md`` path. Returns ``written``/``unchanged``.
+
+    Same contract as the config writers: parents are created, an existing file is
+    backed up once per day, and identical content is a no-op reported as such
+    rather than a change - ``install --with-skill`` is idempotent and re-running
+    it must not mint a backup every time.
+    """
+    if path.is_file() and path.read_text(encoding="utf-8") == content:
+        return "unchanged"
+    if dry_run:
+        return "written"
+    _backup(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(content, encoding="utf-8", newline="\n")
+    os.replace(temporary, path)
+    return "written"
+
+
+# --------------------------------------------------------------------------- #
 # path resolution
 # --------------------------------------------------------------------------- #
 
@@ -421,6 +519,18 @@ def _home() -> Path:
 
 def _claude_path() -> Optional[Path]:
     return _home() / ".claude.json"
+
+
+def _cursor_path() -> Optional[Path]:
+    """Global Cursor config. A project-local ``.cursor/mcp.json`` shares the shape.
+
+    Cursor resolves two locations: ``.cursor/mcp.json`` in the project root wins
+    over ``~/.cursor/mcp.json`` globally, with no merging when both define the
+    same server name. The installer writes the global one, which is the right
+    default for a decision model used across projects; commit the project file
+    by hand when the server is intrinsic to one repo.
+    """
+    return _home() / ".cursor" / "mcp.json"
 
 
 def _codex_path() -> Optional[Path]:
@@ -477,6 +587,60 @@ def _hermes_path() -> Optional[Path]:
 
 
 # --------------------------------------------------------------------------- #
+# skill locations: one SKILL.md per harness, global scope
+# --------------------------------------------------------------------------- #
+#
+# Every harness below converges on ``<skills>/<name>/SKILL.md``; only the root
+# differs. Cursor additionally reads ``.agents/skills`` and the Claude/Codex
+# directories, Codex additionally reads ``.agents/skills`` and ``$CODEX_HOME``,
+# and opencode additionally reads the Claude/agent directories - so a skill
+# installed at the native path is found, and the project fallback in ``install``
+# writes the neutral ``.agents/skills`` shape too.
+
+
+def _claude_skill_path(name: str) -> Optional[Path]:
+    return _home() / ".claude" / "skills" / name / "SKILL.md"
+
+
+def _cursor_skill_path(name: str) -> Optional[Path]:
+    return _home() / ".cursor" / "skills" / name / "SKILL.md"
+
+
+def _codex_skill_path(name: str) -> Optional[Path]:
+    # CODEX_HOME relocates the whole state directory, skills included.
+    root = os.environ.get("CODEX_HOME")
+    base = Path(root) if root else _home() / ".codex"
+    return base / "skills" / name / "SKILL.md"
+
+
+def _opencode_skill_path(name: str) -> Optional[Path]:
+    base = Path(os.environ.get("XDG_CONFIG_HOME") or (_home() / ".config")) / "opencode"
+    return base / "skills" / name / "SKILL.md"
+
+
+def _openclaw_skill_path(name: str) -> Optional[Path]:
+    # The managed/global skill root (`openclaw skills install --global`).
+    # OPENCLAW_CONFIG_PATH only relocates the config file, not the skills root.
+    return _home() / ".openclaw" / "skills" / name / "SKILL.md"
+
+
+def _hermes_skill_dir(name: str) -> Path:
+    """The Hermes skills root, honouring the same overrides as the config path."""
+    override = os.environ.get("HERMES_HOME", "").strip()
+    if override:
+        return Path(override) / "skills" / name / "SKILL.md"
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA", "").strip()
+        base = Path(local) if local else _home() / "AppData" / "Local"
+        return base / "hermes" / "skills" / name / "SKILL.md"
+    return _home() / ".hermes" / "skills" / name / "SKILL.md"
+
+
+def _hermes_skill_path(name: str) -> Optional[Path]:
+    return _hermes_skill_dir(name)
+
+
+# --------------------------------------------------------------------------- #
 # the registry
 # --------------------------------------------------------------------------- #
 
@@ -490,6 +654,24 @@ HARNESSES: tuple[Harness, ...] = (
         write=_write_claude,
         verify=("claude", "mcp", "list"),
         detect=("claude",),
+        skill_path=_claude_skill_path,
+        skill_location="~/.claude/skills/<name>/SKILL.md",
+    ),
+    Harness(
+        id="cursor",
+        label="Cursor",
+        config_path=_cursor_path,
+        fmt="json",
+        location="top-level `mcpServers` in ~/.cursor/mcp.json",
+        write=_write_cursor,
+        # No verifiable lister: Cursor exposes MCP under Settings > Tools & MCP
+        # and requires a full quit-and-reopen before a new server appears in
+        # Agent mode, so there is no `cursor mcp list` to ask. The file is still
+        # worth writing: unlike `pi`, the config surface exists and is documented.
+        verify=None,
+        detect=("cursor", "cursor-agent"),
+        skill_path=_cursor_skill_path,
+        skill_location="~/.cursor/skills/<name>/SKILL.md",
     ),
     Harness(
         id="codex",
@@ -500,6 +682,8 @@ HARNESSES: tuple[Harness, ...] = (
         write=_write_codex,
         verify=("codex", "mcp", "list"),
         detect=("codex",),
+        skill_path=_codex_skill_path,
+        skill_location="$CODEX_HOME/skills/<name>/SKILL.md, else ~/.codex/skills/<name>/SKILL.md",
     ),
     Harness(
         id="opencode",
@@ -510,6 +694,8 @@ HARNESSES: tuple[Harness, ...] = (
         write=_write_opencode,
         verify=("opencode", "mcp", "list"),
         detect=("opencode",),
+        skill_path=_opencode_skill_path,
+        skill_location="~/.config/opencode/skills/<name>/SKILL.md",
     ),
     Harness(
         id="openclaw",
@@ -520,6 +706,8 @@ HARNESSES: tuple[Harness, ...] = (
         write=_write_openclaw,
         verify=("openclaw", "mcp", "list"),
         detect=("openclaw",),
+        skill_path=_openclaw_skill_path,
+        skill_location="~/.openclaw/skills/<name>/SKILL.md",
     ),
     Harness(
         id="hermes",
@@ -534,6 +722,8 @@ HARNESSES: tuple[Harness, ...] = (
         # nothing ever asked Hermes whether it could see the server. It could not.
         verify=("hermes", "mcp", "list"),
         detect=("hermes",),
+        skill_path=_hermes_skill_path,
+        skill_location="~/.hermes/skills/<name>/SKILL.md (`HERMES_HOME` else platform default)",
     ),
     Harness(
         id="pi",
@@ -614,14 +804,36 @@ def install(
     python: Optional[str] = None,
     dry_run: bool = False,
     project: Optional[str] = None,
+    with_skill: bool = False,
+    skill_only: bool = False,
+    skill_name: str = DEFAULT_SKILL_NAME,
+    skill_source: Optional[str] = None,
 ) -> int:
-    """Write the registration into every detected harness. Returns an exit code."""
+    """Write the registration into every detected harness. Returns an exit code.
+
+    ``with_skill`` additionally writes ``SKILL.md`` into each targeted harness's
+    own skill directory; ``skill_only`` writes the skills and skips the MCP
+    registration entirely. Both take ``--project`` into account (project skill
+    directories, see below).
+    """
     interpreter = python or sys.executable
-    try:
-        entry = build_entry(name, python=interpreter, url=url)
-    except ValueError as exc:
-        print(f"laya-mcp: {exc}", file=sys.stderr)
-        return 2
+    do_config = not skill_only
+    do_skill = with_skill or skill_only
+    entry: Optional[Entry] = None
+    if do_config:
+        try:
+            entry = build_entry(name, python=interpreter, url=url)
+        except ValueError as exc:
+            print(f"laya-mcp: {exc}", file=sys.stderr)
+            return 2
+
+    skill_content: Optional[str] = None
+    if do_skill:
+        try:
+            skill_content = load_skill_source(skill_source)
+        except ValueError as exc:
+            print(f"laya-mcp: {exc}", file=sys.stderr)
+            return 2
 
     targets = detect_harnesses()
     if harness:
@@ -636,13 +848,17 @@ def install(
             return 2
         targets = [t for t in targets if t[0].id in wanted]
 
-    print(f"registering `{entry.name}` -> {entry.command} {' '.join(entry.args)}")
+    if do_config and entry is not None:
+        print(f"registering `{entry.name}` -> {entry.command} {' '.join(entry.args)}")
+    if do_skill:
+        print(f"installing skill `{skill_name}` from {'--skill-source' if skill_source else 'the packaged SKILL.md'}")
     if dry_run:
         print("(dry run: nothing will be written)\n")
 
     configured = 0
     skipped = 0
     failed = 0
+    skills = 0
 
     for target, present, path in targets:
         if target.unsupported_reason is not None:
@@ -652,35 +868,64 @@ def install(
             continue
         if not present:
             continue
-        if path is None:
-            continue
 
-        print(f"  {target.label:<12} {path}")
-        if dry_run:
-            print(f"               would write {target.location}")
-            configured += 1
-            continue
+        if do_config:
+            if path is None:
+                continue
+            assert entry is not None
+            print(f"  {target.label:<12} {path}")
+            if dry_run:
+                print(f"               would write {target.location}")
+                configured += 1
+            else:
+                try:
+                    backup = _backup(path)
+                    target.write(path, entry)
+                except Exception as exc:  # noqa: BLE001 - one harness failing must not stop the rest
+                    print(f"               FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+                    failed += 1
+                    # Fall through to the skill: a broken config must not block it.
+                else:
+                    where = f"{target.location}"
+                    if backup is not None:
+                        where += f"  (backup: {backup.name})"
+                    print(f"               wrote {where}")
+                    configured += 1
 
-        try:
-            backup = _backup(path)
-            target.write(path, entry)
-        except Exception as exc:  # noqa: BLE001 - one harness failing must not stop the rest
-            print(f"               FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
-            failed += 1
-            continue
+                    if target.verify and _which(target.verify[0]):
+                        _report_verification(target)
 
-        where = f"{target.location}"
-        if backup is not None:
-            where += f"  (backup: {backup.name})"
-        print(f"               wrote {where}")
-        configured += 1
-
-        if target.verify and _which(target.verify[0]):
-            _report_verification(target)
+        if do_skill and skill_content is not None:
+            if target.skill_path is None or target.skill_location is None:
+                continue
+            try:
+                skill_file = target.skill_path(skill_name)
+            except Exception as exc:  # noqa: BLE001
+                print(f"               skill FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+                failed += 1
+                continue
+            if skill_file is None:
+                continue
+            if dry_run:
+                print(f"  {target.label:<12} {skill_file}")
+                print(f"               would write skill ({target.skill_location})")
+                skills += 1
+                continue
+            try:
+                outcome = install_skill_file(skill_file, skill_content)
+            except Exception as exc:  # noqa: BLE001
+                print(f"               skill FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+                failed += 1
+                continue
+            if outcome == "unchanged":
+                print(f"               skill `{skill_name}` unchanged at {skill_file}")
+            else:
+                print(f"               wrote skill `{skill_name}` to {skill_file}")
+            skills += 1
 
     # A project-local file, if asked for. Separate from the global write because
     # it is a different file with a different lifetime.
-    if project and not dry_run:
+    if project and do_config and not dry_run and entry is not None:
         project_file = Path(project) / ".mcp.json"
         try:
             backup = _backup(project_file)
@@ -693,12 +938,38 @@ def install(
             print(f"  project      FAILED: {exc}", file=sys.stderr)
             failed += 1
 
+    if project and do_skill and skill_content is not None:
+        # One write per native project shape. `.agents/skills` is the neutral
+        # shape Codex, Cursor, opencode and OpenClaw all read; `.claude/skills`
+        # and `.cursor/skills` cover the harnesses that prefer their own root.
+        # Hermes has no project skill scope, so the global skill above is it.
+        project_root = Path(project)
+        for dirname in (".agents", ".claude", ".cursor"):
+            skill_file = project_root / dirname / "skills" / skill_name / "SKILL.md"
+            if dry_run:
+                print(f"  {'project':<12} {skill_file}")
+                print("               would write skill (project scope)")
+                skills += 1
+                continue
+            try:
+                outcome = install_skill_file(skill_file, skill_content)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  project      skill FAILED: {exc}", file=sys.stderr)
+                failed += 1
+                continue
+            if outcome == "unchanged":
+                print(f"               project skill `{skill_name}` unchanged at {skill_file}")
+            else:
+                print(f"               wrote project skill `{skill_name}` to {skill_file}")
+            skills += 1
+
     print()
-    if configured == 0 and skipped == 0:
+    if configured == 0 and skills == 0 and skipped == 0:
         print("no supported harness was detected; nothing was written.")
         print("Run `laya-mcp install --harness <id> --dry-run` to see the target paths.")
         return 1
-    print(f"{configured} harness(es) configured, {skipped} skipped, {failed} failed.")
+    summary = f"{configured} harness(es) configured, {skills} skill(s) installed, {skipped} skipped, {failed} failed."
+    print(summary)
     if failed:
         return 1
     print(
@@ -774,6 +1045,8 @@ def describe_targets() -> int:
         mark = "installed" if present else "-"
         print(f"{harness.id:<12} {mark:<10} {path if path else '-'}")
         print(f"{'':<12} {'':<10} {harness.location}")
+        if harness.skill_location:
+            print(f"{'':<12} {'':<10} skill: {harness.skill_location}")
         if harness.unsupported_reason:
             print(f"{'':<12} {'':<10} NOTE: {harness.unsupported_reason}")
     return 0
