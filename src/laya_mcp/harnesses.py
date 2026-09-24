@@ -7,6 +7,7 @@ they disagree on everything:
 harness      config file                                 format     the key
 ===========  ==========================================  =========  ==========================
 Claude Code  ``~/.claude.json`` (or a project ``.mcp.json``)  JSON   ``mcpServers``
+Cursor       ``~/.cursor/mcp.json``                           JSON   ``mcpServers``
 Codex        ``~/.codex/config.toml``                     TOML       ``[mcp_servers.<name>]``
 opencode     ``~/.config/opencode/opencode.json[c]``      JSON       ``mcp``
 OpenClaw     ``~/.openclaw/openclaw.json``                JSON       ``mcp.servers``
@@ -216,7 +217,7 @@ def _toml_string(value: str) -> str:
     """A TOML basic string.
 
     Written by hand rather than with a library: the standard library can *read*
-    TOML but not write it, and adding a writer dependency to configure five
+    TOML but not write it, and adding a writer dependency to configure six
     harnesses is not a trade worth making. Escaping the two characters that
     actually appear in a Windows path plus the quote itself covers the real input.
     """
@@ -365,6 +366,29 @@ def _write_claude(path: Path, entry: Entry) -> None:
     _write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
+def _write_cursor(path: Path, entry: Entry) -> None:
+    """Cursor: top-level ``mcpServers`` in ``~/.cursor/mcp.json``.
+
+    Same key as Claude Code, deliberately *without* ``type``: Cursor's own
+    ``mcp.json`` docs show entries as ``{command, args, env}`` (plus ``url`` /
+    ``headers`` for remote servers) and no ``type`` field. Emitting one would
+    look reasonable and do nothing, the same trap ``alwaysAllow`` was for Claude.
+    A project-local ``.cursor/mcp.json`` shares the shape; only the path differs,
+    and the project file wins over the global one with no merging.
+    """
+    data = _read_json(path)
+    servers = data.setdefault("mcpServers", {})
+    if not isinstance(servers, dict):
+        raise ValueError(f"{path}: `mcpServers` exists but is not an object")
+    block: dict[str, Any] = {"command": entry.command}
+    if entry.args:
+        block["args"] = list(entry.args)
+    if entry.env:
+        block["env"] = dict(entry.env)
+    servers[entry.name] = block
+    _write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+
 def _write_opencode(path: Path, entry: Entry) -> None:
     """opencode: ``mcp``, and three ways it differs from everyone else.
 
@@ -421,6 +445,18 @@ def _home() -> Path:
 
 def _claude_path() -> Optional[Path]:
     return _home() / ".claude.json"
+
+
+def _cursor_path() -> Optional[Path]:
+    """Global Cursor config. A project-local ``.cursor/mcp.json`` shares the shape.
+
+    Cursor resolves two locations: ``.cursor/mcp.json`` in the project root wins
+    over ``~/.cursor/mcp.json`` globally, with no merging when both define the
+    same server name. The installer writes the global one, which is the right
+    default for a decision model used across projects; commit the project file
+    by hand when the server is intrinsic to one repo.
+    """
+    return _home() / ".cursor" / "mcp.json"
 
 
 def _codex_path() -> Optional[Path]:
@@ -490,6 +526,20 @@ HARNESSES: tuple[Harness, ...] = (
         write=_write_claude,
         verify=("claude", "mcp", "list"),
         detect=("claude",),
+    ),
+    Harness(
+        id="cursor",
+        label="Cursor",
+        config_path=_cursor_path,
+        fmt="json",
+        location="top-level `mcpServers` in ~/.cursor/mcp.json",
+        write=_write_cursor,
+        # No verifiable lister: Cursor exposes MCP under Settings > Tools & MCP
+        # and requires a full quit-and-reopen before a new server appears in
+        # Agent mode, so there is no `cursor mcp list` to ask. The file is still
+        # worth writing: unlike `pi`, the config surface exists and is documented.
+        verify=None,
+        detect=("cursor", "cursor-agent"),
     ),
     Harness(
         id="codex",

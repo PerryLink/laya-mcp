@@ -75,7 +75,7 @@ and a **health surface** that reports a demotion.
 
 ---
 
-## One installer, five harnesses
+## One installer, six harnesses
 
 There is no portable way to register an MCP server. Measured against real
 installed harnesses, they disagree on the file, the format, and the key:
@@ -83,6 +83,7 @@ installed harnesses, they disagree on the file, the format, and the key:
 | harness | config | format | key |
 |---|---|---|---|
 | Claude Code | `~/.claude.json` | JSON | `mcpServers` |
+| Cursor | `~/.cursor/mcp.json` | JSON | `mcpServers` |
 | Codex | `~/.codex/config.toml` | TOML | `[mcp_servers.<name>]` |
 | opencode | `~/.config/opencode/opencode.json[c]` | JSON | `mcp` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON | `mcp.servers` |
@@ -229,6 +230,7 @@ from an accepted one:
 |---|---|---|
 | opencode | `opencode mcp list` | ✓ connected |
 | claude | `claude mcp list` | √ Connected |
+| cursor | Settings > Tools & MCP (full quit-and-reopen required) | entry under `mcpServers` in `~/.cursor/mcp.json`; project `.cursor/mcp.json` wins with no merge |
 | codex | `codex mcp list --json` | `enabled`, `"type": "stdio"`, correct argv — `auth_status: unsupported` is not a fault, a local stdio server needs none |
 | OpenClaw | `openclaw mcp list --json` | reports the server, stdio transport |
 | Hermes | `hermes mcp list` | ✓ enabled, and `hermes mcp test laya` connects and finds all 5 tools |
