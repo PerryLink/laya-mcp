@@ -62,7 +62,11 @@ packages = ["laya_mcp"]
 version = { attr = "laya_mcp.__version__" }
 
 [tool.setuptools.package-data]
-laya_mcp = ["py.typed"]
+# SKILL.md is vendored next to the code so `install --with-skill` can read it
+# from an installed wheel via `importlib.resources`. The repository-root copy
+# stays the canonical document; `tests/install_harnesses.py` fails when the two
+# drift apart.
+laya_mcp = ["py.typed", "SKILL.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
