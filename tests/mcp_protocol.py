@@ -296,6 +296,33 @@ async def main() -> int:
                 # A protocol-level error is also a correct refusal.
                 check("unknown tool is refused", True)
 
+    # The bare form, with no subcommand. This is what `npx -y laya-mcp` runs and
+    # what a harness that simply writes the package name into its config spawns,
+    # so it is the invocation most users actually hit. It used to exit 1 with
+    # `AttributeError: 'Namespace' object has no attribute 'model'`, because the
+    # no-subcommand branch hand-built a Namespace carrying only `sidecar` and
+    # `filter` while `_cmd_mcp` reads the whole option set. Spawning it through
+    # the real stdio transport is the only way to catch that: the branch is
+    # reachable only when stdin is not a tty, which is exactly what a client
+    # gives it.
+    print("\nthe bare invocation (no subcommand) also serves MCP")
+    bare = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "laya_mcp"],
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+    )
+    async with stdio_client(bare) as (read, write):
+        async with ClientSession(read, write) as session:
+            try:
+                bare_info = await session.initialize()
+                check("bare invocation completes the handshake", bare_info is not None)
+                bare_tools = await session.list_tools()
+                check("bare invocation exposes every tool",
+                      {t.name for t in bare_tools.tools} == expected,
+                      str(sorted(t.name for t in bare_tools.tools)))
+            except Exception as error:  # noqa: BLE001 - reported, not swallowed
+                check("bare invocation completes the handshake", False, repr(error))
+
     print()
     if FAILURES:
         print(f"{len(FAILURES)}/{CHECKS} checks FAILED:")

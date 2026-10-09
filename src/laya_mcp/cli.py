@@ -427,7 +427,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if sys.stdin.isatty():
             parser.print_help()
             return 0
-        return _cmd_mcp(argparse.Namespace(sidecar=None, filter=None))
+        # Re-parse as if the caller had written `mcp`, so the subparser's own
+        # defaults populate every option `_cmd_mcp` reads. Hand-building a
+        # Namespace here instead dropped those defaults and made a bare
+        # `python -m laya_mcp` — and therefore `npx -y laya-mcp`, which is what
+        # the npm package documents — exit 1 with
+        # `AttributeError: 'Namespace' object has no attribute 'model'`.
+        args = parser.parse_args(["mcp"])
 
     handlers = {
         "serve": _cmd_serve,
